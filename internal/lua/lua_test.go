@@ -1,0 +1,528 @@
+package lua
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"testing/fstest"
+	"time"
+
+	"go-screeps/bots"
+	"go-screeps/internal/engine"
+)
+
+func TestConstantsAndAPI(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W1N1", 101)
+	if _, err := w.SpawnBot("Alice", "W1N1"); err != nil {
+		t.Fatalf("SpawnBot: %v", err)
+	}
+	uid := w.EnsureUser("Alice")
+
+	fsys := fstest.MapFS{
+		"bot/main.lua": &fstest.MapFile{
+			Data: []byte(`
+function loop()
+    assert(OK == 0, "OK")
+    assert(ERR_NOT_IN_RANGE == -9, "ERR_NOT_IN_RANGE")
+    assert(FIND_SOURCES == 105, "FIND_SOURCES")
+    assert(STRUCTURE_SPAWN == "spawn", "STRUCTURE_SPAWN")
+    assert(RESOURCE_ENERGY == "energy", "RESOURCE_ENERGY")
+    assert(WORK == "work" and CARRY == "carry" and MOVE == "move", "bodyparts")
+    assert(TOP == 1 and TOP_LEFT == 8, "directions")
+    assert(TERRAIN_MASK_WALL == 1 and TERRAIN_MASK_SWAMP == 2, "terrain")
+    assert(BODYPART_COST[WORK] == 100, "BODYPART_COST")
+
+    local room = Game.rooms["W1N1"]
+    assert(room ~= nil, "room W1N1 missing")
+    assert(room.name == "W1N1", "room name")
+    assert(room.energyAvailable == 300, "energyAvailable=" .. tostring(room.energyAvailable))
+    assert(room.energyCapacityAvailable == 300, "energyCap=" .. tostring(room.energyCapacityAvailable))
+    assert(room.controller ~= nil and room.controller.level == 1, "controller")
+
+    local spawn = Game.spawns["Spawn1"]
+    assert(spawn ~= nil, "Spawn1 missing")
+    assert(spawn.my == true, "spawn.my")
+    assert(spawn.store[RESOURCE_ENERGY] == 300, "store index")
+    assert(spawn.store:getUsedCapacity(RESOURCE_ENERGY) == 300, "store getUsedCapacity")
+    assert(spawn.store:getFreeCapacity(RESOURCE_ENERGY) == 0, "store getFreeCapacity")
+    assert(spawn.store:getCapacity(RESOURCE_ENERGY) == 300, "store getCapacity")
+
+    local byId = Game.getObjectById(spawn.id)
+    assert(byId ~= nil and byId.id == spawn.id, "getObjectById")
+
+    local sources = room:find(FIND_SOURCES)
+    assert(#sources == 2, "expected 2 sources, got " .. tostring(#sources))
+    local closest = spawn.pos:findClosestByRange(sources)
+    assert(closest ~= nil, "findClosestByRange")
+    assert(spawn.pos:getRangeTo(closest) >= 1, "getRangeTo")
+    assert(spawn.pos:isEqualTo(spawn.pos.x, spawn.pos.y), "isEqualTo")
+    assert(spawn.pos:isNearTo(spawn.pos.x + 1, spawn.pos.y), "isNearTo")
+    assert(spawn.pos:inRangeTo(spawn.pos.x + 2, spawn.pos.y, 2), "inRangeTo")
+
+    local terrain = room:getTerrain()
+    assert(terrain:get(0, 0) == TERRAIN_MASK_WALL, "border wall")
+    assert(terrain:get(spawn.pos.x, spawn.pos.y) == TERRAIN_MASK_PLAIN, "spawn plain")
+
+    local look = room:lookForAt(LOOK_STRUCTURES, spawn.pos.x, spawn.pos.y)
+    assert(#look == 1 and look[1].id == spawn.id, "lookForAt")
+
+    local cm = PathFinder.CostMatrix()
+    cm:set(10, 10, 42)
+    assert(cm:get(10, 10) == 42, "CostMatrix get/set")
+    local cm2 = cm:clone()
+    assert(cm2:get(10, 10) == 42, "CostMatrix clone")
+
+    local pfRes = PathFinder.search(spawn.pos, { pos = sources[1].pos, range = 1 }, {
+        roomCallback = function(rn) return cm end
+    })
+    assert(pfRes.incomplete == false and #pfRes.path > 0, "PathFinder.search")
+
+    room.visual:circle(spawn.pos.x, spawn.pos.y, { radius = 0.5, fill = "#00ff00" })
+    room.visual:line(spawn.pos.x, spawn.pos.y, sources[1].pos.x, sources[1].pos.y, { color = "#ffffff", width = 0.1 })
+    room.visual:rect(2, 2, 3, 3, { fill = "#0000ff" })
+    room.visual:poly({ {1, 1}, {2, 2}, {3, 1} }, { stroke = "#ff0000" })
+    room.visual:text("HUD", 2, 4, { color = "#ffffff" })
+
+    assert(Game.cpu.getUsed() >= 0, "cpu.getUsed")
+    console.log("api_ok")
+end
+`),
+		},
+	}
+
+	vm := NewBotVM("Alice", uid)
+	defer vm.Close()
+	if err := vm.LoadFS(fsys, "bot"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if err := vm.RunTick(w); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+	w.Step()
+
+	logs := vm.Logs()
+	if len(logs) == 0 || !strings.Contains(logs[len(logs)-1], "api_ok") {
+		t.Fatalf("expected api_ok log, got %v", logs)
+	}
+	snap := w.Snapshot("W1N1")
+	if len(snap.Visuals) != 5 {
+		t.Fatalf("expected 5 visuals, got %d", len(snap.Visuals))
+	}
+}
+
+func TestMemoryPersistence(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W2N2", 7)
+	if _, err := w.SpawnBot("Bob", "W2N2"); err != nil {
+		t.Fatalf("SpawnBot: %v", err)
+	}
+	uid := w.EnsureUser("Bob")
+
+	fsys := fstest.MapFS{
+		"bot/main.lua": &fstest.MapFile{
+			Data: []byte(`
+function loop()
+    Memory.ticks = (Memory.ticks or 0) + 1
+    local spawn = Game.spawns["Spawn1"]
+    if Game.time == 1 and spawn then
+        local rc = spawn:spawnCreep({ WORK, CARRY, MOVE }, "worker1", {
+            memory = { role = "harvester", count = 10 }
+        })
+        assert(rc == OK, "spawnCreep failed: " .. tostring(rc))
+    end
+    local c = Game.creeps["worker1"]
+    if c then
+        assert(c.memory.role == "harvester", "creep memory role")
+        c.memory.count = (c.memory.count or 0) + 1
+    end
+end
+`),
+		},
+	}
+
+	vm := NewBotVM("Bob", uid)
+	defer vm.Close()
+	if err := vm.LoadFS(fsys, "bot"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+
+	for i := 0; i < 15; i++ {
+		if err := vm.RunTick(w); err != nil {
+			t.Fatalf("tick %d: %v", i+1, err)
+		}
+		w.Step()
+	}
+
+	// Verify Memory.ticks == 15 and Memory.creeps.worker1.count > 10.
+	if err := vm.L.DoString(`
+		assert(Memory.ticks == 15, "ticks=" .. tostring(Memory.ticks))
+		assert(Memory.creeps.worker1 ~= nil, "worker1 memory missing")
+		assert(Memory.creeps.worker1.role == "harvester", "role mismatch")
+		assert(Memory.creeps.worker1.count > 10, "count did not increment: " .. tostring(Memory.creeps.worker1.count))
+	`); err != nil {
+		t.Fatalf("memory assertion failed: %v", err)
+	}
+}
+
+func TestRequireSandboxing(t *testing.T) {
+	fsys := fstest.MapFS{
+		"bot/main.lua": &fstest.MapFile{
+			Data: []byte(`
+assert(io == nil, "io must be nil")
+assert(os == nil, "os must be nil")
+assert(debug == nil, "debug must be nil")
+assert(dofile == nil, "dofile must be nil")
+assert(loadfile == nil, "loadfile must be nil")
+
+local h1 = require("helper")
+local h2 = require("helper")
+assert(h1 == h2, "require must cache in package.loaded")
+assert(h1.value == 123, "helper value")
+
+local ok1 = pcall(require, "../secret")
+assert(not ok1, "path traversal must fail")
+
+local ok2 = pcall(require, "/etc/passwd")
+assert(not ok2, "absolute path must fail")
+
+function loop() end
+`),
+		},
+		"bot/helper.lua": &fstest.MapFile{
+			Data: []byte(`return { value = 123 }`),
+		},
+	}
+
+	vm := NewBotVM("SandboxTest", "u1")
+	defer vm.Close()
+	if err := vm.LoadFS(fsys, "bot"); err != nil {
+		t.Fatalf("LoadFS failed: %v", err)
+	}
+}
+
+func TestCPUTimeout(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W3N3", 3)
+	_, _ = w.SpawnBot("Looper", "W3N3")
+	uid := w.EnsureUser("Looper")
+
+	fsys := fstest.MapFS{
+		"bot/main.lua": &fstest.MapFile{
+			Data: []byte(`
+function loop()
+    while true do end
+end
+`),
+		},
+	}
+
+	vm := NewBotVM("Looper", uid)
+	defer vm.Close()
+	vm.CPULimit = 25 * time.Millisecond
+	if err := vm.LoadFS(fsys, "bot"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+
+	start := time.Now()
+	err := vm.RunTick(w)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("expected CPU timeout error, got nil")
+	}
+	if !strings.Contains(err.Error(), "context deadline exceeded") {
+		t.Fatalf("expected context deadline exceeded, got: %v", err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("timeout took too long: %v", elapsed)
+	}
+	if vm.LastError == "" {
+		t.Fatalf("expected LastError to be populated")
+	}
+}
+
+func TestDiskHotReload(t *testing.T) {
+	dir := t.TempDir()
+	mainPath := filepath.Join(dir, "main.lua")
+	modPath := filepath.Join(dir, "greeting.lua")
+
+	if err := os.WriteFile(modPath, []byte(`return "v1"`), 0o644); err != nil {
+		t.Fatalf("write greeting.lua: %v", err)
+	}
+	if err := os.WriteFile(mainPath, []byte(`
+local g = require("greeting")
+function loop()
+    Memory.persisted = Memory.persisted or 42
+    print("ver=" .. g .. " mem=" .. tostring(Memory.persisted))
+end
+`), 0o644); err != nil {
+		t.Fatalf("write main.lua: %v", err)
+	}
+
+	w := engine.NewWorld()
+	w.GenerateRoom("W4N4", 4)
+	_, _ = w.SpawnBot("Hot", "W4N4")
+	uid := w.EnsureUser("Hot")
+
+	vm := NewBotVM("Hot", uid)
+	defer vm.Close()
+	if err := vm.LoadDir(dir); err != nil {
+		t.Fatalf("LoadDir: %v", err)
+	}
+
+	if err := vm.RunTick(w); err != nil {
+		t.Fatalf("tick 1: %v", err)
+	}
+	logs1 := vm.Logs()
+	if len(logs1) == 0 || !strings.Contains(logs1[len(logs1)-1], "ver=v1 mem=42") {
+		t.Fatalf("expected v1 log, got %v", logs1)
+	}
+
+	// Update greeting.lua and advance mtime explicitly to avoid filesystem timestamp granularity issues.
+	if err := os.WriteFile(modPath, []byte(`return "v2"`), 0o644); err != nil {
+		t.Fatalf("rewrite greeting.lua: %v", err)
+	}
+	future := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(modPath, future, future); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	if err := vm.RunTick(w); err != nil {
+		t.Fatalf("tick 2: %v", err)
+	}
+	logs2 := vm.Logs()
+	if len(logs2) == 0 || !strings.Contains(logs2[len(logs2)-1], "ver=v2 mem=42") {
+		t.Fatalf("expected v2 log with preserved Memory, got %v", logs2)
+	}
+}
+
+func TestLocalRunnerStartPauseSwitch(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W5N5", 5)
+	w.GenerateRoom("W5N6", 6)
+
+	runner := NewLocalRunner(w, "W5N5")
+	defer runner.Close()
+
+	if err := runner.AddEmbeddedBot("Starter", "W5N5", bots.StarterFS, "starter"); err != nil {
+		t.Fatalf("AddEmbeddedBot: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var updates atomic.Int32
+	runner.Start(ctx, 5*time.Millisecond, func() {
+		updates.Add(1)
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for updates.Load() < 5 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if updates.Load() < 5 {
+		t.Fatalf("expected >= 5 ticks from Start loop, got %d", updates.Load())
+	}
+
+	runner.SetPaused(true)
+	if !runner.Paused() {
+		t.Fatalf("expected Paused() == true")
+	}
+	time.Sleep(15 * time.Millisecond)
+	pausedCount := updates.Load()
+	time.Sleep(25 * time.Millisecond)
+	if updates.Load() != pausedCount {
+		t.Fatalf("ticks advanced while paused: %d -> %d", pausedCount, updates.Load())
+	}
+
+	runner.SetTickPeriod(10 * time.Millisecond)
+	runner.SwitchRoom("W5N6")
+	snap := runner.Snapshot()
+	if snap.Room != "W5N6" {
+		t.Fatalf("expected switched room W5N6, got %q", snap.Room)
+	}
+	cancel()
+}
+
+func TestStarterBotSoak600Ticks(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W9N7", 42)
+
+	runner := NewLocalRunner(w, "W9N7")
+	defer runner.Close()
+
+	if err := runner.AddEmbeddedBot("Starter", "W9N7", bots.StarterFS, "starter"); err != nil {
+		t.Fatalf("AddEmbeddedBot: %v", err)
+	}
+
+	botList := runner.Bots()
+	if len(botList) != 1 {
+		t.Fatalf("expected 1 bot, got %d", len(botList))
+	}
+	vm := botList[0]
+	// Allow headroom for Go -race instrumentation on pure-Go gopher-lua BFS ticks.
+	vm.CPULimit = 250 * time.Millisecond
+
+	maxCreeps := 0
+	harvested := false
+	sitesSeen := 0
+	visualsSeen := 0
+
+	for tick := 1; tick <= 600; tick++ {
+		runner.StepTick()
+		if vm.LastError != "" {
+			t.Fatalf("Lua runtime error at tick %d: %s", tick, vm.LastError)
+		}
+
+		snap := runner.Snapshot()
+		if len(snap.Visuals) > visualsSeen {
+			visualsSeen = len(snap.Visuals)
+		}
+		creeps := 0
+		sites := 0
+		for _, obj := range snap.Objects {
+			switch obj.Type {
+			case engine.TYPE_CREEP:
+				creeps++
+			case engine.TYPE_SOURCE:
+				if obj.Energy < engine.SOURCE_ENERGY_CAPACITY {
+					harvested = true
+				}
+			case engine.TYPE_CONSTRUCTION_SITE:
+				sites++
+			}
+		}
+		if creeps > maxCreeps {
+			maxCreeps = creeps
+		}
+		if sites > sitesSeen {
+			sitesSeen = sites
+		}
+	}
+
+	// Inspect final room state.
+	room := w.GetRoom("W9N7")
+	w.RLock()
+	ctrl := room.FindController()
+	ctrlLevel := 0
+	ctrlProgress := 0
+	builtStructures := 0
+	if ctrl != nil {
+		ctrlLevel = ctrl.Level
+		ctrlProgress = ctrl.Progress
+	}
+	for _, e := range room.Entities {
+		if e.IsStructure() && e.Type != engine.STRUCTURE_SPAWN && e.Type != engine.STRUCTURE_CONTROLLER {
+			builtStructures++
+		}
+	}
+	w.RUnlock()
+
+	t.Logf("600-tick soak summary: maxCreeps=%d, harvested=%v, RCL=%d, progress=%d, maxSites=%d, builtStructures=%d, maxVisuals=%d, lastCPU=%v",
+		maxCreeps, harvested, ctrlLevel, ctrlProgress, sitesSeen, builtStructures, visualsSeen, vm.LastCPU)
+
+	if maxCreeps == 0 {
+		t.Fatalf("expected creeps to be spawned over 600 ticks")
+	}
+	if !harvested {
+		t.Fatalf("expected energy to be harvested from sources")
+	}
+	if ctrlLevel < 2 && ctrlProgress == 0 {
+		t.Fatalf("expected controller progress > 0 or RCL >= 2, got RCL=%d progress=%d", ctrlLevel, ctrlProgress)
+	}
+	if sitesSeen == 0 && builtStructures == 0 {
+		t.Fatalf("expected construction sites to be placed (RCL=%d, maxSites=%d, built=%d)", ctrlLevel, sitesSeen, builtStructures)
+	}
+	if visualsSeen == 0 {
+		t.Fatalf("expected RoomVisuals to be emitted")
+	}
+}
+
+func TestMigrateDBJSONW9N7(t *testing.T) {
+	const dbPath = "/home/mini/Documents/src/screeps/server/db.json"
+	if _, err := os.Stat(dbPath); err != nil {
+		t.Skipf("skipping live db.json migration test (%s not present: %v)", dbPath, err)
+	}
+
+	w := engine.NewWorld()
+	if err := w.ImportFullDBJSON(dbPath); err != nil {
+		t.Fatalf("ImportFullDBJSON: %v", err)
+	}
+
+	w.RLock()
+	startTime := w.GameTime
+	w.RUnlock()
+	if startTime <= 1000 {
+		t.Fatalf("expected migrated GameTime > 1000, got %d", startTime)
+	}
+
+	ownerID, ownerName := w.RoomOwner("W9N7")
+	if ownerID == "" || ownerName != "Hivemind" {
+		t.Fatalf("expected W9N7 owner Hivemind, got id=%q name=%q", ownerID, ownerName)
+	}
+
+	runner := NewLocalRunner(w, "W9N7")
+	defer runner.Close()
+
+	if err := runner.AttachEmbeddedBot(ownerName, "W9N7", bots.StarterFS, "starter"); err != nil {
+		t.Fatalf("AttachEmbeddedBot: %v", err)
+	}
+
+	botList := runner.Bots()
+	if len(botList) != 1 {
+		t.Fatalf("expected 1 attached bot, got %d", len(botList))
+	}
+	vm := botList[0]
+	if vm.UserID != ownerID {
+		t.Fatalf("expected attached bot UserID %q, got %q", ownerID, vm.UserID)
+	}
+	vm.CPULimit = 250 * time.Millisecond
+
+	for i := 1; i <= 50; i++ {
+		runner.StepTick()
+		if vm.LastError != "" {
+			t.Fatalf("Lua runtime error at migrated tick %d: %s", i, vm.LastError)
+		}
+	}
+
+	snap := runner.Snapshot()
+	if snap.GameTime != startTime+50 {
+		t.Fatalf("expected GameTime=%d after 50 ticks, got %d", startTime+50, snap.GameTime)
+	}
+
+	hasSpawn1 := false
+	extensions := 0
+	creeps := 0
+	for _, obj := range snap.Objects {
+		switch obj.Type {
+		case engine.STRUCTURE_SPAWN:
+			if obj.Name == "Spawn1" && obj.User == ownerID {
+				hasSpawn1 = true
+			}
+		case engine.STRUCTURE_EXTENSION:
+			if obj.User == ownerID {
+				extensions++
+			}
+		case engine.TYPE_CREEP:
+			if obj.User == ownerID {
+				creeps++
+			}
+		}
+	}
+
+	t.Logf("W9N7 migration summary: startTick=%d endTick=%d owner=%s(%s) Spawn1=%v extensions=%d creeps=%d visuals=%d",
+		startTime, snap.GameTime, ownerName, ownerID, hasSpawn1, extensions, creeps, len(snap.Visuals))
+
+	if !hasSpawn1 {
+		t.Fatalf("expected W9N7 to retain Spawn1 owned by %s", ownerName)
+	}
+	if extensions == 0 {
+		t.Fatalf("expected W9N7 to retain extensions, got 0")
+	}
+	if creeps == 0 {
+		t.Fatalf("expected W9N7 to retain creeps, got 0")
+	}
+}

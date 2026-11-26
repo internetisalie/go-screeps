@@ -1,0 +1,9 @@
+# Built binaries
+/go-screeps
+/screeps-viewer
+/sim-bench
+
+# Runtime persistence & logs
+world_state.json
+world_state.json.tmp
+*.log
