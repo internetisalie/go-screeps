@@ -9,6 +9,8 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -1872,8 +1874,31 @@ func activateMainWindow() {
 
 // acquireSingleInstance uses a Linux abstract Unix domain socket so the kernel
 // automatically cleans it up on exit/crash (no stale lock files). If another
-// instance is already running, it signals it to activate and returns (nil, false).
-func acquireSingleInstance(socketName string) (net.Listener, bool) {
+func defaultStatePath() string {
+	// Prefer a local world_state.json if one already exists in the working directory.
+	if _, err := os.Stat("world_state.json"); err == nil {
+		if abs, absErr := filepath.Abs("world_state.json"); absErr == nil {
+			return abs
+		}
+		return "world_state.json"
+	}
+	if dir, err := os.UserConfigDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "go-screeps", "world_state.json")
+	}
+	return "world_state.json"
+}
+
+func singleInstanceSocket() string {
+	if runtime.GOOS == "linux" {
+		return "@go-screeps-instance"
+	}
+	return filepath.Join(os.TempDir(), "go-screeps.sock")
+}
+
+// acquireSingleInstance enforces a single running instance via a Unix domain socket.
+// If another instance is already running, it signals it to activate and returns (nil, false).
+func acquireSingleInstance() (net.Listener, bool) {
+	socketName := singleInstanceSocket()
 	ln, err := net.Listen("unix", socketName)
 	if err == nil {
 		go func() {
@@ -1894,7 +1919,23 @@ func acquireSingleInstance(socketName string) (net.Listener, bool) {
 		_ = conn.Close()
 		return nil, false
 	}
-	// If dialing also failed (e.g. non-Linux or transient error), proceed normally.
+	// On non-Linux Unix (e.g. macOS), a crashed process can leave a stale socket file behind.
+	if runtime.GOOS != "linux" && !strings.HasPrefix(socketName, "@") {
+		_ = os.Remove(socketName)
+		if ln2, err2 := net.Listen("unix", socketName); err2 == nil {
+			go func() {
+				for {
+					conn, err := ln2.Accept()
+					if err != nil {
+						return
+					}
+					_ = conn.Close()
+					activateMainWindow()
+				}
+			}()
+			return ln2, true
+		}
+	}
 	return nil, true
 }
 
@@ -1906,18 +1947,23 @@ func main() {
 	local := flag.Bool("local", false, "Run embedded Go engine + Lua bot locally (no Node.js server required)")
 	migrate := flag.Bool("migrate", false, "Import full live state (structures, creeps, GameTime) from -db in -local mode")
 	dbPath := flag.String("db", "", "Optional path to Screeps db.json to import rooms from in -local mode")
-	statePath := flag.String("state", "/home/mini/Documents/src/screeps/go-screeps/world_state.json", "Path to auto-save/load local world + Lua Memory state (empty disables persistence)")
+	statePath := flag.String("state", defaultStatePath(), "Path to auto-save/load local world + Lua Memory state (empty disables persistence)")
 	botSpec := flag.String("bot", "", "Optional comma-separated Name=Dir@Room bots for -local mode")
 	rival := flag.String("rival", "auto", "Rival room for competing embedded raider Lua bot in -local mode ('auto' picks a connected neighbor, '' disables)")
 	tick := flag.Duration("tick", 250*time.Millisecond, "Tick period in -local mode")
 	seed := flag.Int64("seed", 42, "Room generation seed in -local mode")
 	flag.Parse()
 
-	if ln, ok := acquireSingleInstance("@go-screeps-instance"); !ok {
+	if ln, ok := acquireSingleInstance(); !ok {
 		log.Printf("go-screeps is already running; activated existing window")
 		return
 	} else if ln != nil {
-		defer ln.Close()
+		defer func() {
+			_ = ln.Close()
+			if runtime.GOOS != "linux" {
+				_ = os.Remove(singleInstanceSocket())
+			}
+		}()
 	}
 
 	app := gowaku.App{
