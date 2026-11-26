@@ -875,21 +875,162 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 	// Clear central spawn area.
 	clearArea(25, 25, 4)
 
-	// 4. Permute the 4 quadrants so sources, controller, and mineral vary in position per room.
-	quads := [4][2]int{
-		{8 + rng.Intn(12), 8 + rng.Intn(12)},   // NW
-		{30 + rng.Intn(12), 8 + rng.Intn(12)},  // NE
-		{30 + rng.Intn(12), 30 + rng.Intn(12)}, // SE
-		{8 + rng.Intn(12), 30 + rng.Intn(12)},  // SW
+	// 4. BFS flood-fill from center (25,25): connect all border exits first, then fill
+	// any remaining isolated pockets/lakes with wall so the walkable space is 1 single basin.
+	bfsWalkable := func() [RoomSize * RoomSize]bool {
+		var vis [RoomSize * RoomSize]bool
+		queue := make([][2]int, 0, 1024)
+		vis[25*RoomSize+25] = true
+		queue = append(queue, [2]int{25, 25})
+		for head := 0; head < len(queue); head++ {
+			cur := queue[head]
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					if dx == 0 && dy == 0 {
+						continue
+					}
+					nx, ny := cur[0]+dx, cur[1]+dy
+					if nx <= 0 || nx >= RoomSize-1 || ny <= 0 || ny >= RoomSize-1 {
+						continue
+					}
+					idx := ny*RoomSize + nx
+					if !vis[idx] && room.Terrain[idx] != TERRAIN_MASK_WALL {
+						vis[idx] = true
+						queue = append(queue, [2]int{nx, ny})
+					}
+				}
+			}
+		}
+		return vis
+	}
+
+	vis := bfsWalkable()
+	for _, tgt := range exitAnchors {
+		if vis[tgt[1]*RoomSize+tgt[0]] {
+			continue
+		}
+		bestX, bestY := 25, 25
+		bestD2 := 999999
+		for y := 2; y < RoomSize-2; y++ {
+			for x := 2; x < RoomSize-2; x++ {
+				if !vis[y*RoomSize+x] {
+					continue
+				}
+				d2 := (x-tgt[0])*(x-tgt[0]) + (y-tgt[1])*(y-tgt[1])
+				if d2 < bestD2 {
+					bestD2 = d2
+					bestX, bestY = x, y
+				}
+			}
+		}
+		cx, cy := bestX, bestY
+		for steps := 0; steps < 100 && (cx != tgt[0] || cy != tgt[1]); steps++ {
+			clearArea(cx, cy, 1)
+			if cx < tgt[0] {
+				cx++
+			} else if cx > tgt[0] {
+				cx--
+			}
+			if cy < tgt[1] {
+				cy++
+			} else if cy > tgt[1] {
+				cy--
+			}
+		}
+		clearArea(tgt[0], tgt[1], 1)
+		vis = bfsWalkable()
+	}
+
+	// Fill any isolated interior walkable pockets/lakes with solid wall.
+	for y := 1; y < RoomSize-1; y++ {
+		for x := 1; x < RoomSize-1; x++ {
+			idx := y*RoomSize + x
+			if !vis[idx] && room.Terrain[idx] != TERRAIN_MASK_WALL {
+				room.Terrain[idx] = TERRAIN_MASK_WALL
+			}
+		}
+	}
+
+	// 5. Pick POIs (2 sources, 1 controller, 1 mineral) exclusively from open tiles
+	// already inside the single connected reachable basin, permuted across the 4 quadrants.
+	pickPOIInQuadrant := func(xMin, xMax, yMin, yMax int, used [][2]int) [2]int {
+		var openCands, fallbackCands [][2]int
+		tooClose := func(x, y int) bool {
+			if (x-25)*(x-25)+(y-25)*(y-25) < 49 { // keep >= 7 tiles from spawn center
+				return true
+			}
+			for _, u := range used {
+				if (x-u[0])*(x-u[0])+(y-u[1])*(y-u[1]) < 64 {
+					return true
+				}
+			}
+			return false
+		}
+		for y := yMin; y <= yMax; y++ {
+			for x := xMin; x <= xMax; x++ {
+				idx := y*RoomSize + x
+				if !vis[idx] || room.Terrain[idx] == TERRAIN_MASK_WALL || tooClose(x, y) {
+					continue
+				}
+				walkableN := 0
+				for oy := -1; oy <= 1; oy++ {
+					for ox := -1; ox <= 1; ox++ {
+						if ox == 0 && oy == 0 {
+							continue
+						}
+						if room.Terrain[(y+oy)*RoomSize+(x+ox)] != TERRAIN_MASK_WALL {
+							walkableN++
+						}
+					}
+				}
+				if walkableN >= 5 && room.Terrain[idx] == TERRAIN_MASK_PLAIN {
+					openCands = append(openCands, [2]int{x, y})
+				} else if walkableN >= 3 {
+					fallbackCands = append(fallbackCands, [2]int{x, y})
+				}
+			}
+		}
+		if len(openCands) > 0 {
+			return openCands[rng.Intn(len(openCands))]
+		}
+		if len(fallbackCands) > 0 {
+			return fallbackCands[rng.Intn(len(fallbackCands))]
+		}
+		// Ultra-rare fallback: scan whole reachable basin.
+		for y := 5; y < RoomSize-5; y++ {
+			for x := 5; x < RoomSize-5; x++ {
+				if vis[y*RoomSize+x] && !tooClose(x, y) {
+					fallbackCands = append(fallbackCands, [2]int{x, y})
+				}
+			}
+		}
+		if len(fallbackCands) > 0 {
+			return fallbackCands[rng.Intn(len(fallbackCands))]
+		}
+		return [2]int{(xMin + xMax) / 2, (yMin + yMax) / 2}
+	}
+
+	quadBounds := [4][4]int{
+		{5, 22, 5, 22},   // NW
+		{27, 44, 5, 22},  // NE
+		{27, 44, 27, 44}, // SE
+		{5, 22, 27, 44},  // SW
 	}
 	perm := rng.Perm(4)
-	s1 := quads[perm[0]]
-	s2 := quads[perm[2]]
-	ctrlPos := quads[perm[1]]
-	minPos := quads[perm[3]]
+	var usedPOIs [][2]int
+	pickQ := func(qi int) [2]int {
+		b := quadBounds[qi]
+		p := pickPOIInQuadrant(b[0], b[1], b[2], b[3], usedPOIs)
+		usedPOIs = append(usedPOIs, p)
+		return p
+	}
+	s1 := pickQ(perm[0])
+	s2 := pickQ(perm[2])
+	ctrlPos := pickQ(perm[1])
+	minPos := pickQ(perm[3])
 
 	for _, pos := range [][2]int{s1, s2} {
-		clearArea(pos[0], pos[1], 2)
+		clearArea(pos[0], pos[1], 1)
 		id := w.nextEntityID("src")
 		room.Entities[id] = &Entity{
 			ID:             id,
@@ -902,8 +1043,7 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 		}
 	}
 
-	// 5. Place 1 controller.
-	clearArea(ctrlPos[0], ctrlPos[1], 2)
+	clearArea(ctrlPos[0], ctrlPos[1], 1)
 	ctrlID := w.nextEntityID("ctrl")
 	room.Entities[ctrlID] = &Entity{
 		ID:            ctrlID,
@@ -916,9 +1056,8 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 		ProgressTotal: 0,
 	}
 
-	// 6. Place 1 mineral.
 	minerals := []string{RESOURCE_HYDROGEN, RESOURCE_OXYGEN, RESOURCE_UTRIUM, RESOURCE_LEMERGIUM, RESOURCE_KEANIUM, RESOURCE_ZYNTHIUM, RESOURCE_CATALYST}
-	clearArea(minPos[0], minPos[1], 2)
+	clearArea(minPos[0], minPos[1], 1)
 	minID := w.nextEntityID("min")
 	room.Entities[minID] = &Entity{
 		ID:            minID,
@@ -929,78 +1068,6 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 		MineralType:   minerals[rng.Intn(len(minerals))],
 		MineralAmount: MINERAL_DENSITY_AMOUNT,
 	}
-
-	// 7. Guarantee 100% BFS walkability from center (25,25) to all POIs & exits;
-	// if any target is sealed behind a ridge, carve a natural 3-tile pass to it.
-	ensureConnected := func(targets [][2]int) {
-		bfs := func() [RoomSize * RoomSize]bool {
-			var vis [RoomSize * RoomSize]bool
-			queue := make([][2]int, 0, 1024)
-			vis[25*RoomSize+25] = true
-			queue = append(queue, [2]int{25, 25})
-			for head := 0; head < len(queue); head++ {
-				cur := queue[head]
-				for dy := -1; dy <= 1; dy++ {
-					for dx := -1; dx <= 1; dx++ {
-						if dx == 0 && dy == 0 {
-							continue
-						}
-						nx, ny := cur[0]+dx, cur[1]+dy
-						if nx <= 0 || nx >= RoomSize-1 || ny <= 0 || ny >= RoomSize-1 {
-							continue
-						}
-						idx := ny*RoomSize + nx
-						if !vis[idx] && room.Terrain[idx] != TERRAIN_MASK_WALL {
-							vis[idx] = true
-							queue = append(queue, [2]int{nx, ny})
-						}
-					}
-				}
-			}
-			return vis
-		}
-
-		vis := bfs()
-		for _, tgt := range targets {
-			if vis[tgt[1]*RoomSize+tgt[0]] {
-				continue
-			}
-			// Find closest reachable tile to tgt and carve a smooth pass.
-			bestX, bestY := 25, 25
-			bestD2 := 999999
-			for y := 2; y < RoomSize-2; y++ {
-				for x := 2; x < RoomSize-2; x++ {
-					if !vis[y*RoomSize+x] {
-						continue
-					}
-					d2 := (x-tgt[0])*(x-tgt[0]) + (y-tgt[1])*(y-tgt[1])
-					if d2 < bestD2 {
-						bestD2 = d2
-						bestX, bestY = x, y
-					}
-				}
-			}
-			cx, cy := bestX, bestY
-			for steps := 0; steps < 100 && (cx != tgt[0] || cy != tgt[1]); steps++ {
-				clearArea(cx, cy, 1)
-				if cx < tgt[0] {
-					cx++
-				} else if cx > tgt[0] {
-					cx--
-				}
-				if cy < tgt[1] {
-					cy++
-				} else if cy > tgt[1] {
-					cy--
-				}
-			}
-			clearArea(tgt[0], tgt[1], 1)
-			vis = bfs()
-		}
-	}
-
-	poiTargets := append([][2]int{s1, s2, ctrlPos, minPos}, exitAnchors...)
-	ensureConnected(poiTargets)
 
 	w.Rooms[name] = room
 	return room
