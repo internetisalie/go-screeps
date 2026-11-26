@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"sort"
@@ -591,97 +592,281 @@ func (w *World) getEntityLocked(id string) *Entity {
 	return nil
 }
 
-// GenerateRoom procedurally creates a playable 50x50 room with bordered walls,
-// open exits, natural rock clusters, swamps, 2 sources, 1 mineral, and 1 controller.
+// smoothNoise2D evaluates deterministic 2D bilinear value noise in [0, 1].
+func smoothNoise2D(x, y float64, seed uint64) float64 {
+	hash := func(ix, iy int) float64 {
+		h := uint64(ix)*374761393 + uint64(iy)*668265263 + seed*1442695040888963407
+		h = (h ^ (h >> 13)) * 1274126177
+		h = h ^ (h >> 16)
+		return float64(h&0xFFFFFF) / float64(0x1000000)
+	}
+	x0 := int(math.Floor(x))
+	y0 := int(math.Floor(y))
+	fx := x - float64(x0)
+	fy := y - float64(y0)
+	// Smoothstep interpolation
+	ux := fx * fx * (3 - 2*fx)
+	uy := fy * fy * (3 - 2*fy)
+	n00 := hash(x0, y0)
+	n10 := hash(x0+1, y0)
+	n01 := hash(x0, y0+1)
+	n11 := hash(x0+1, y0+1)
+	nx0 := n00 + (n10-n00)*ux
+	nx1 := n01 + (n11-n01)*ux
+	return nx0 + (nx1-nx0)*uy
+}
+
+// fbm2D evaluates 2-octave fractal value noise in [0, 1].
+func fbm2D(x, y float64, seed uint64) float64 {
+	return 0.65*smoothNoise2D(x, y, seed) + 0.35*smoothNoise2D(x*2.1+17.3, y*2.1-9.7, seed^0x9e3779b97f4a7c15)
+}
+
+// GenerateRoom procedurally creates a playable 50x50 room with varied biome archetypes,
+// organic cellular-automata mountain ranges and swamps, neighbor-matched exits,
+// 2 sources, 1 mineral, 1 controller, and guaranteed BFS walkability.
 func (w *World) GenerateRoom(name string, seed int64) *Room {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	name = strings.ToUpper(strings.TrimSpace(name))
 	rng := rand.New(rand.NewSource(seed))
+	noiseSeed := uint64(seed)*0x517cc1b727220a95 ^ 0x2545f4914f6cdd1d
 	room := &Room{
 		Name:     name,
 		Entities: make(map[string]*Entity),
 	}
 
-	// 1. Border walls with exits on all 4 edges.
-	for i := 0; i < RoomSize; i++ {
-		room.Terrain[0*RoomSize+i] = TERRAIN_MASK_WALL
-		room.Terrain[(RoomSize-1)*RoomSize+i] = TERRAIN_MASK_WALL
-		room.Terrain[i*RoomSize+0] = TERRAIN_MASK_WALL
-		room.Terrain[i*RoomSize+(RoomSize-1)] = TERRAIN_MASK_WALL
-	}
-	// Carve exits (width 8) on N/S/W/E edges.
-	for _, start := range []int{18 + rng.Intn(8)} {
-		for i := start; i < start+8 && i < RoomSize-2; i++ {
-			room.Terrain[0*RoomSize+i] = TERRAIN_MASK_PLAIN
-			room.Terrain[1*RoomSize+i] = TERRAIN_MASK_PLAIN
-		}
-	}
-	for _, start := range []int{18 + rng.Intn(8)} {
-		for i := start; i < start+8 && i < RoomSize-2; i++ {
-			room.Terrain[(RoomSize-1)*RoomSize+i] = TERRAIN_MASK_PLAIN
-			room.Terrain[(RoomSize-2)*RoomSize+i] = TERRAIN_MASK_PLAIN
-		}
-	}
-	for _, start := range []int{18 + rng.Intn(8)} {
-		for i := start; i < start+8 && i < RoomSize-2; i++ {
-			room.Terrain[i*RoomSize+0] = TERRAIN_MASK_PLAIN
-			room.Terrain[i*RoomSize+1] = TERRAIN_MASK_PLAIN
-		}
-	}
-	for _, start := range []int{18 + rng.Intn(8)} {
-		for i := start; i < start+8 && i < RoomSize-2; i++ {
-			room.Terrain[i*RoomSize+(RoomSize-1)] = TERRAIN_MASK_PLAIN
-			room.Terrain[i*RoomSize+(RoomSize-2)] = TERRAIN_MASK_PLAIN
+	// Pick one of 5 distinct room archetypes for rich terrain variety:
+	// 0: Canyon / Ridge Valley   1: Marshland / Bayou   2: Fortress / Caldera
+	// 3: Archipelago / Mesas     4: Twin Basins / Divide
+	archetype := rng.Intn(5)
+	wallFreq := 0.11 + rng.Float64()*0.07
+	swampFreq := 0.10 + rng.Float64()*0.07
+	angle := rng.Float64() * math.Pi // random ridge/river orientation
+
+	var wallGrid [RoomSize * RoomSize]bool
+	var swampGrid [RoomSize * RoomSize]bool
+
+	// 1. Seed organic heightfields according to archetype.
+	cosA, sinA := math.Cos(angle), math.Sin(angle)
+	for y := 0; y < RoomSize; y++ {
+		for x := 0; x < RoomSize; x++ {
+			idx := y*RoomSize + x
+			// Edge distance (0 on border, 24.5 at center).
+			edgeDist := float64(min(min(x, RoomSize-1-x), min(y, RoomSize-1-y)))
+			dx := float64(x) - 24.5
+			dy := float64(y) - 24.5
+			rCenter := math.Hypot(dx, dy) / 24.5
+			// Rotated coordinate along ridge/river axis.
+			perp := math.Abs(dx*sinA - dy*cosA)
+
+			nWall := fbm2D(float64(x)*wallFreq, float64(y)*wallFreq, noiseSeed)
+			nSwamp := fbm2D(float64(x)*swampFreq+31.7, float64(y)*swampFreq+19.3, noiseSeed^0xa5a5a5a5)
+
+			isWall := false
+			isSwamp := false
+
+			switch archetype {
+			case 0: // Canyon / Ridge Valley: sweeping mountain ridges framing a winding valley
+				ridgeBias := 0.22 * math.Sin(perp*0.32)
+				isWall = (nWall + ridgeBias) > 0.62
+				isSwamp = nSwamp > 0.64
+			case 1: // Marshland / Bayou: sparse rocks, expansive lush swamp basins
+				isWall = nWall > 0.72
+				isSwamp = nSwamp > 0.44
+			case 2: // Fortress / Caldera: thick stepped outer mountain ring + open central plateau
+				ringBias := 0.0
+				if edgeDist < 6 {
+					ringBias = (6.0 - edgeDist) * 0.09
+				} else if rCenter < 0.42 {
+					ringBias = -0.22
+				}
+				isWall = (nWall + ringBias) > 0.61
+				isSwamp = nSwamp > 0.66
+			case 3: // Archipelago / Mesas: crisp scattered rocky mesas & pillars
+				nMesa := fbm2D(float64(x)*0.16, float64(y)*0.16, noiseSeed+7)
+				isWall = nMesa > 0.63
+				isSwamp = nSwamp > 0.58
+			case 4: // Twin Basins: central ridge or swamp river splitting the room with passes
+				band := math.Exp(-(perp * perp) / 26.0)
+				if seed%2 == 0 {
+					isWall = (nWall + band*0.30) > 0.64
+					isSwamp = nSwamp > 0.62
+				} else {
+					isWall = nWall > 0.67
+					isSwamp = (nSwamp + band*0.35) > 0.54
+				}
+			}
+
+			// Natural organic outer border thickness (1-3 tiles deep).
+			if edgeDist == 0 || (edgeDist <= 2 && nWall > 0.46) {
+				isWall = true
+			}
+			// Keep central spawn basin gently open.
+			if rCenter < 0.22 {
+				isWall = false
+			}
+
+			wallGrid[idx] = isWall
+			swampGrid[idx] = isSwamp && !isWall
 		}
 	}
 
-	// 2. Scatter organic wall blobs away from the center (keeping a wide playable basin).
-	for b := 0; b < 8; b++ {
-		cx := 5 + rng.Intn(40)
-		cy := 5 + rng.Intn(40)
-		// Keep central 16x16 region open for spawning and base building.
-		if cx >= 17 && cx <= 33 && cy >= 17 && cy <= 33 {
-			continue
-		}
-		rad := 2 + rng.Intn(3)
-		for dy := -rad; dy <= rad; dy++ {
-			for dx := -rad; dx <= rad; dx++ {
-				nx, ny := cx+dx, cy+dy
-				if nx > 2 && nx < RoomSize-3 && ny > 2 && ny < RoomSize-3 {
-					if dx*dx+dy*dy <= rad*rad && rng.Intn(100) < 75 {
-						room.Terrain[ny*RoomSize+nx] = TERRAIN_MASK_WALL
+	// 2. Cellular automata smoothing (3 passes for crisp organic walls, 2 passes for smooth swamps).
+	smoothGrid := func(grid *[RoomSize * RoomSize]bool, passes, birth, survive int, keepBorder bool) {
+		var next [RoomSize * RoomSize]bool
+		for p := 0; p < passes; p++ {
+			for y := 0; y < RoomSize; y++ {
+				for x := 0; x < RoomSize; x++ {
+					idx := y*RoomSize + x
+					if x == 0 || x == RoomSize-1 || y == 0 || y == RoomSize-1 {
+						next[idx] = keepBorder
+						continue
+					}
+					cnt := 0
+					for oy := -1; oy <= 1; oy++ {
+						for ox := -1; ox <= 1; ox++ {
+							if ox == 0 && oy == 0 {
+								continue
+							}
+							if grid[(y+oy)*RoomSize+(x+ox)] {
+								cnt++
+							}
+						}
+					}
+					if grid[idx] {
+						next[idx] = cnt >= survive
+					} else {
+						next[idx] = cnt >= birth
 					}
 				}
+			}
+			*grid = next
+		}
+	}
+	smoothGrid(&wallGrid, 3, 5, 4, true)
+	smoothGrid(&swampGrid, 2, 5, 4, false)
+
+	for i := 0; i < RoomSize*RoomSize; i++ {
+		if wallGrid[i] {
+			room.Terrain[i] = TERRAIN_MASK_WALL
+		} else if swampGrid[i] {
+			room.Terrain[i] = TERRAIN_MASK_SWAMP
+		} else {
+			room.Terrain[i] = TERRAIN_MASK_PLAIN
+		}
+	}
+
+	// 3. Carve exits on N/S/W/E edges (matching existing neighbor rooms seamlessly when present).
+	type edgeSpec struct {
+		dir      int // 1=N, 3=E, 5=S, 7=W
+		neighbor string
+	}
+	nbN, _ := AdjacentRoomName(name, 0, -1)
+	nbE, _ := AdjacentRoomName(name, 1, 0)
+	nbS, _ := AdjacentRoomName(name, 0, 1)
+	nbW, _ := AdjacentRoomName(name, -1, 0)
+	edges := []edgeSpec{
+		{1, nbN},
+		{3, nbE},
+		{5, nbS},
+		{7, nbW},
+	}
+	var exitAnchors [][2]int
+
+	carveExitTile := func(dir, pos int) {
+		if pos < 2 || pos > RoomSize-3 {
+			return
+		}
+		switch dir {
+		case 1: // North (y=0)
+			for d := 0; d < 3; d++ {
+				room.Terrain[d*RoomSize+pos] = TERRAIN_MASK_PLAIN
+			}
+		case 5: // South (y=49)
+			for d := 0; d < 3; d++ {
+				room.Terrain[(RoomSize-1-d)*RoomSize+pos] = TERRAIN_MASK_PLAIN
+			}
+		case 7: // West (x=0)
+			for d := 0; d < 3; d++ {
+				room.Terrain[pos*RoomSize+d] = TERRAIN_MASK_PLAIN
+			}
+		case 3: // East (x=49)
+			for d := 0; d < 3; d++ {
+				room.Terrain[pos*RoomSize+(RoomSize-1-d)] = TERRAIN_MASK_PLAIN
 			}
 		}
 	}
 
-	// 3. Scatter swamp patches.
-	for b := 0; b < 10; b++ {
-		cx := 4 + rng.Intn(42)
-		cy := 4 + rng.Intn(42)
-		rad := 2 + rng.Intn(4)
-		for dy := -rad; dy <= rad; dy++ {
-			for dx := -rad; dx <= rad; dx++ {
-				nx, ny := cx+dx, cy+dy
-				if nx > 1 && nx < RoomSize-2 && ny > 1 && ny < RoomSize-2 {
-					if dx*dx+dy*dy <= rad*rad && room.Terrain[ny*RoomSize+nx] == TERRAIN_MASK_PLAIN && rng.Intn(100) < 65 {
-						room.Terrain[ny*RoomSize+nx] = TERRAIN_MASK_SWAMP
-					}
+	for _, e := range edges {
+		var openPositions []int
+		if nb, exists := w.Rooms[e.neighbor]; exists && nb != nil {
+			// Copy matching border exit openings from already-loaded neighbor room.
+			for i := 2; i < RoomSize-2; i++ {
+				var nbTile uint8
+				switch e.dir {
+				case 1:
+					nbTile = nb.Terrain[(RoomSize-1)*RoomSize+i]
+				case 5:
+					nbTile = nb.Terrain[0*RoomSize+i]
+				case 7:
+					nbTile = nb.Terrain[i*RoomSize+(RoomSize-1)]
+				case 3:
+					nbTile = nb.Terrain[i*RoomSize+0]
 				}
+				if nbTile != TERRAIN_MASK_WALL {
+					carveExitTile(e.dir, i)
+					openPositions = append(openPositions, i)
+				}
+			}
+		} else {
+			// Carve 1 or 2 varied exit passes (width 4..11) along this edge.
+			numPasses := 1
+			if rng.Intn(100) < 35 {
+				numPasses = 2
+			}
+			for p := 0; p < numPasses; p++ {
+				width := 4 + rng.Intn(8)
+				var start int
+				if numPasses == 2 {
+					if p == 0 {
+						start = 6 + rng.Intn(12)
+					} else {
+						start = 28 + rng.Intn(12)
+					}
+				} else {
+					start = 8 + rng.Intn(34-width)
+				}
+				for i := start; i < start+width && i < RoomSize-2; i++ {
+					carveExitTile(e.dir, i)
+					openPositions = append(openPositions, i)
+				}
+			}
+		}
+		if len(openPositions) > 0 {
+			mid := openPositions[len(openPositions)/2]
+			switch e.dir {
+			case 1:
+				exitAnchors = append(exitAnchors, [2]int{mid, 2})
+			case 5:
+				exitAnchors = append(exitAnchors, [2]int{mid, RoomSize - 3})
+			case 7:
+				exitAnchors = append(exitAnchors, [2]int{2, mid})
+			case 3:
+				exitAnchors = append(exitAnchors, [2]int{RoomSize - 3, mid})
 			}
 		}
 	}
 
-	// Helper to clear a 3x3 walkable area around (x, y) and ensure (x, y) is plain.
+	// Helper to clear a walkable area around (x, y) and ensure (x, y) is plain.
 	clearArea := func(x, y, radius int) {
 		for dy := -radius; dy <= radius; dy++ {
 			for dx := -radius; dx <= radius; dx++ {
 				nx, ny := x+dx, y+dy
 				if nx >= 2 && nx <= RoomSize-3 && ny >= 2 && ny <= RoomSize-3 {
-					room.Terrain[ny*RoomSize+nx] = TERRAIN_MASK_PLAIN
+					if dx*dx+dy*dy <= radius*radius+1 {
+						room.Terrain[ny*RoomSize+nx] = TERRAIN_MASK_PLAIN
+					}
 				}
 			}
 		}
@@ -690,13 +875,21 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 	// Clear central spawn area.
 	clearArea(25, 25, 4)
 
-	// 4. Place 2 energy sources in opposite quadrants.
-	s1x, s1y := 10+rng.Intn(8), 10+rng.Intn(8)
-	s2x, s2y := 32+rng.Intn(8), 32+rng.Intn(8)
-	clearArea(s1x, s1y, 2)
-	clearArea(s2x, s2y, 2)
+	// 4. Permute the 4 quadrants so sources, controller, and mineral vary in position per room.
+	quads := [4][2]int{
+		{8 + rng.Intn(12), 8 + rng.Intn(12)},   // NW
+		{30 + rng.Intn(12), 8 + rng.Intn(12)},  // NE
+		{30 + rng.Intn(12), 30 + rng.Intn(12)}, // SE
+		{8 + rng.Intn(12), 30 + rng.Intn(12)},  // SW
+	}
+	perm := rng.Perm(4)
+	s1 := quads[perm[0]]
+	s2 := quads[perm[2]]
+	ctrlPos := quads[perm[1]]
+	minPos := quads[perm[3]]
 
-	for _, pos := range [][2]int{{s1x, s1y}, {s2x, s2y}} {
+	for _, pos := range [][2]int{s1, s2} {
+		clearArea(pos[0], pos[1], 2)
 		id := w.nextEntityID("src")
 		room.Entities[id] = &Entity{
 			ID:             id,
@@ -710,15 +903,14 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 	}
 
 	// 5. Place 1 controller.
-	ctrlX, ctrlY := 32+rng.Intn(8), 10+rng.Intn(8)
-	clearArea(ctrlX, ctrlY, 2)
+	clearArea(ctrlPos[0], ctrlPos[1], 2)
 	ctrlID := w.nextEntityID("ctrl")
 	room.Entities[ctrlID] = &Entity{
 		ID:            ctrlID,
 		Type:          STRUCTURE_CONTROLLER,
 		Room:          name,
-		X:             ctrlX,
-		Y:             ctrlY,
+		X:             ctrlPos[0],
+		Y:             ctrlPos[1],
 		Level:         0,
 		Progress:      0,
 		ProgressTotal: 0,
@@ -726,18 +918,89 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 
 	// 6. Place 1 mineral.
 	minerals := []string{RESOURCE_HYDROGEN, RESOURCE_OXYGEN, RESOURCE_UTRIUM, RESOURCE_LEMERGIUM, RESOURCE_KEANIUM, RESOURCE_ZYNTHIUM, RESOURCE_CATALYST}
-	minX, minY := 10+rng.Intn(8), 32+rng.Intn(8)
-	clearArea(minX, minY, 2)
+	clearArea(minPos[0], minPos[1], 2)
 	minID := w.nextEntityID("min")
 	room.Entities[minID] = &Entity{
 		ID:            minID,
 		Type:          TYPE_MINERAL,
 		Room:          name,
-		X:             minX,
-		Y:             minY,
+		X:             minPos[0],
+		Y:             minPos[1],
 		MineralType:   minerals[rng.Intn(len(minerals))],
 		MineralAmount: MINERAL_DENSITY_AMOUNT,
 	}
+
+	// 7. Guarantee 100% BFS walkability from center (25,25) to all POIs & exits;
+	// if any target is sealed behind a ridge, carve a natural 3-tile pass to it.
+	ensureConnected := func(targets [][2]int) {
+		bfs := func() [RoomSize * RoomSize]bool {
+			var vis [RoomSize * RoomSize]bool
+			queue := make([][2]int, 0, 1024)
+			vis[25*RoomSize+25] = true
+			queue = append(queue, [2]int{25, 25})
+			for head := 0; head < len(queue); head++ {
+				cur := queue[head]
+				for dy := -1; dy <= 1; dy++ {
+					for dx := -1; dx <= 1; dx++ {
+						if dx == 0 && dy == 0 {
+							continue
+						}
+						nx, ny := cur[0]+dx, cur[1]+dy
+						if nx <= 0 || nx >= RoomSize-1 || ny <= 0 || ny >= RoomSize-1 {
+							continue
+						}
+						idx := ny*RoomSize + nx
+						if !vis[idx] && room.Terrain[idx] != TERRAIN_MASK_WALL {
+							vis[idx] = true
+							queue = append(queue, [2]int{nx, ny})
+						}
+					}
+				}
+			}
+			return vis
+		}
+
+		vis := bfs()
+		for _, tgt := range targets {
+			if vis[tgt[1]*RoomSize+tgt[0]] {
+				continue
+			}
+			// Find closest reachable tile to tgt and carve a smooth pass.
+			bestX, bestY := 25, 25
+			bestD2 := 999999
+			for y := 2; y < RoomSize-2; y++ {
+				for x := 2; x < RoomSize-2; x++ {
+					if !vis[y*RoomSize+x] {
+						continue
+					}
+					d2 := (x-tgt[0])*(x-tgt[0]) + (y-tgt[1])*(y-tgt[1])
+					if d2 < bestD2 {
+						bestD2 = d2
+						bestX, bestY = x, y
+					}
+				}
+			}
+			cx, cy := bestX, bestY
+			for steps := 0; steps < 100 && (cx != tgt[0] || cy != tgt[1]); steps++ {
+				clearArea(cx, cy, 1)
+				if cx < tgt[0] {
+					cx++
+				} else if cx > tgt[0] {
+					cx--
+				}
+				if cy < tgt[1] {
+					cy++
+				} else if cy > tgt[1] {
+					cy--
+				}
+			}
+			clearArea(tgt[0], tgt[1], 1)
+			vis = bfs()
+		}
+	}
+
+	poiTargets := append([][2]int{s1, s2, ctrlPos, minPos}, exitAnchors...)
+	ensureConnected(poiTargets)
 
 	w.Rooms[name] = room
 	return room
