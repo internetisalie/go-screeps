@@ -176,8 +176,33 @@ func (v viewerApp) CreateState() core.State {
 	return s
 }
 
+func roomSeed(baseSeed int64, roomName string) int64 {
+	h := baseSeed*1099511628211 ^ 1469598103934665603
+	for i := 0; i < len(roomName); i++ {
+		h ^= int64(roomName[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
+func ensureNeighborhood(w *engine.World, centerRoom string, baseSeed int64, radius int) {
+	if w.GetRoom(centerRoom) == nil {
+		w.GenerateRoom(centerRoom, roomSeed(baseSeed, centerRoom))
+	}
+	for _, rn := range iso.NeighborRoomNames(centerRoom, radius) {
+		if w.GetRoom(rn) == nil {
+			w.GenerateRoom(rn, roomSeed(baseSeed, rn))
+		}
+	}
+}
+
 func (s *viewerState) startLocalSim(ignoreSaved bool) {
 	v := s.cfg
+	if ignoreSaved && !v.migrate && strings.TrimSpace(v.dbPath) == "" {
+		// Fresh procedural reset: advance seed so each Reset creates a new varied world.
+		s.cfg.seed = time.Now().UnixNano()
+		v = s.cfg
+	}
 
 	if s.simCancel != nil {
 		s.simCancel()
@@ -233,7 +258,10 @@ func (s *viewerState) startLocalSim(ignoreSaved bool) {
 		}
 	}
 	if world.GetRoom(roomName) == nil {
-		world.GenerateRoom(roomName, v.seed)
+		ensureNeighborhood(world, roomName, v.seed, 2)
+	} else {
+		// Ensure full 5x5 neighborhood exists around the starting room (seamless multi-room rendering).
+		ensureNeighborhood(world, roomName, v.seed, 2)
 	}
 
 	runner := lua.NewLocalRunner(world, roomName)
@@ -264,7 +292,7 @@ func (s *viewerState) startLocalSim(ignoreSaved bool) {
 			}
 			if rivalRoom != "" && rivalRoom != roomName {
 				if world.GetRoom(rivalRoom) == nil {
-					world.GenerateRoom(rivalRoom, v.seed)
+					world.GenerateRoom(rivalRoom, roomSeed(v.seed, rivalRoom))
 				}
 				_, rivalOwner := world.RoomOwner(rivalRoom)
 				if rivalOwner == "" || rivalOwner == primaryOwner {
@@ -522,15 +550,7 @@ func (s *viewerState) recenterOnPan() {
 		return
 	}
 	w := s.localRunner.World()
-	for _, rn := range iso.NeighborRoomNames(newRoom, 1) {
-		if w.GetRoom(rn) == nil {
-			var h int64 = s.cfg.seed
-			for i := 0; i < len(rn); i++ {
-				h = h*31 + int64(rn[i])
-			}
-			w.GenerateRoom(rn, h)
-		}
-	}
+	ensureNeighborhood(w, newRoom, s.cfg.seed, 2)
 	s.cam.ShiftByRooms(rdx, rdy)
 	s.cam.SelectedX = -1
 	s.cam.SelectedY = -1
