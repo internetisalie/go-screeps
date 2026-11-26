@@ -52,13 +52,14 @@ jobs:
           args: release --snapshot --clean
 
       - name: Upload snapshot artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3.2.2-node20
         with:
           name: go-screeps-snapshot-${{ github.sha }}
           path: |
             dist/*.tar.gz
             dist/*.zip
             dist/checksums.txt
+          if-no-files-found: error
 
   release:
     needs: test
