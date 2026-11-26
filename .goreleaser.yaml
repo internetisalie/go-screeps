@@ -1,0 +1,84 @@
+version: 2
+
+project_name: go-screeps
+
+gitea_urls:
+  api: https://gitea.internetisalie.net/api/v1/
+  download: https://gitea.internetisalie.net
+
+env:
+  - CGO_ENABLED=0
+  - GOWORK=off
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: go-screeps
+    main: .
+    binary: go-screeps
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+  - id: sim-bench
+    main: ./cmd/sim-bench
+    binary: sim-bench
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next+{{ .ShortCommit }}"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  gitea:
+    owner: internetisalie
+    name: go-screeps

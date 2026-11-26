@@ -1,7 +1,8 @@
-# Built binaries
+# Built binaries & release output
 /go-screeps
 /screeps-viewer
 /sim-bench
+/dist/
 
 # Runtime persistence & logs
 world_state.json
