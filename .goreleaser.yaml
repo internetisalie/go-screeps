@@ -48,14 +48,25 @@ builds:
       - -s -w
 
 archives:
-  - id: default
+  - id: go-screeps
+    ids:
+      - go-screeps
+    formats:
+      - tar.gz
+    name_template: "go-screeps_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+  - id: sim-bench
+    ids:
+      - sim-bench
     formats:
       - tar.gz
     format_overrides:
       - goos: windows
         formats:
           - zip
-    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "sim-bench_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
 
