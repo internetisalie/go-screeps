@@ -259,12 +259,37 @@ func (r *LocalRunner) Start(ctx context.Context, tickPeriod time.Duration, onUpd
 		defer ticker.Stop()
 
 		for {
+			// Uncapped "Max" mode (period <= 2ms): run as fast as CPU allows without OS timer coalescing.
+			if period <= 2*time.Millisecond {
+				select {
+				case <-ctx.Done():
+					return
+				case newPeriod := <-r.periodCh:
+					if newPeriod > 0 {
+						period = newPeriod
+						ticker.Reset(period)
+					}
+					continue
+				default:
+				}
+				if r.Paused() {
+					time.Sleep(25 * time.Millisecond)
+					continue
+				}
+				r.StepTick()
+				if onUpdate != nil {
+					onUpdate()
+				}
+				continue
+			}
+
 			select {
 			case <-ctx.Done():
 				return
 			case newPeriod := <-r.periodCh:
 				if newPeriod > 0 {
-					ticker.Reset(newPeriod)
+					period = newPeriod
+					ticker.Reset(period)
 				}
 			case <-ticker.C:
 				if r.Paused() {

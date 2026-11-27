@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go-screeps/bots"
@@ -48,6 +49,8 @@ var localSpeeds = []struct {
 	{label: "1x", period: 250 * time.Millisecond},
 	{label: "4x", period: 60 * time.Millisecond},
 	{label: "10x", period: 25 * time.Millisecond},
+	{label: "25x", period: 10 * time.Millisecond},
+	{label: "Max", period: 1 * time.Millisecond},
 }
 
 type viewerApp struct {
@@ -90,9 +93,11 @@ type viewerState struct {
 
 	anims      map[string]creepAnim
 	creepPos   map[string][2]float32
-	lastTick   int64
-	tickAt     time.Time
-	tickPeriod time.Duration
+	lastTick    int64
+	tickAt      time.Time
+	tickPeriod  time.Duration
+	uiPending   atomic.Bool
+	lastUISync  atomic.Int64 // unix nanos of last UI snapshot apply
 
 	dragging  bool
 	orbiting  bool
@@ -131,10 +136,20 @@ func (v viewerApp) CreateState() core.State {
 	s.cancel = cancel
 
 	s.onUpdate = func() {
+		// Coalesce UI refreshes so high-speed simulation never backlogs Cocoa/Metal VSync.
+		nowNs := time.Now().UnixNano()
+		if nowNs-s.lastUISync.Load() < int64(16*time.Millisecond) {
+			return
+		}
+		if !s.uiPending.CompareAndSwap(false, true) {
+			return
+		}
 		gowaku.Post(func() {
+			defer s.uiPending.Store(false)
 			if ctx.Err() != nil {
 				return
 			}
+			s.lastUISync.Store(time.Now().UnixNano())
 			s.SetState(func() {
 				if s.provider != nil {
 					s.applySnapshot(s.provider.Snapshot())
@@ -427,10 +442,12 @@ func (s *viewerState) applySnapshot(newSnap screeps.RoomSnapshot) {
 	}
 	if newSnap.GameTime != s.lastTick && newSnap.GameTime > 0 {
 		now := time.Now()
-		if !s.tickAt.IsZero() {
+		if !s.tickAt.IsZero() && s.lastTick > 0 && newSnap.GameTime > s.lastTick {
+			deltaTicks := newSnap.GameTime - s.lastTick
 			dt := now.Sub(s.tickAt)
-			if dt >= 10*time.Millisecond && dt <= 2*time.Second {
-				s.tickPeriod = (s.tickPeriod*3 + dt) / 4
+			perTick := dt / time.Duration(deltaTicks)
+			if perTick >= 500*time.Microsecond && perTick <= 2*time.Second {
+				s.tickPeriod = (s.tickPeriod*3 + perTick) / 4
 			}
 		}
 		s.tickAt = now
