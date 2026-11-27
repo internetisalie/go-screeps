@@ -1602,7 +1602,7 @@ func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
 					Child:  basic.Container{Color: bodyPartColor(k), Radius: 3.5},
 				},
 				basic.Text{
-					Content: fmt.Sprintf("%dx%s", counts[k], k),
+					Content: fmt.Sprintf("%d×%s", counts[k], k),
 					Style:   th.Text.Caption.WithColor(th.Color.Ink2),
 				},
 			},
