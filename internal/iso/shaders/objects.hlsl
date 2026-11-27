@@ -6,7 +6,9 @@
 // Params:
 //   params[0] = (kind, cosYaw, sinYaw, energyRatio)
 //   params[1] = (colR, colG, colB, flags)
-//               creep flags: 0=harvester, 1=hauler, 2=builder, 3=upgrader, 4=scout, 5=defender/combat
+//               creep flags: 0=harvester, 1=hauler, 2=builder, 3=upgrader, 4=scout, 5=defender/combat,
+//                            6=dismantler, 7=healer/medic, 8=skirmisher, 9=claimer/reserver,
+//                            10=mineralHarvester, 11=pioneer/remoteBuilder
 //               spawn flags: 4=actively spawning
 //   params[2] = (anchorX, anchorY, scalePx, 0)
 
@@ -49,6 +51,11 @@ float sdOctahedron(float3 p, float s) {
     return (p.x + p.y + p.z - s) * 0.57735027;
 }
 
+float sdTorus(float3 p, float2 tr) {
+    float2 q = float2(length(p.xz) - tr.x, p.y);
+    return length(q) - tr.y;
+}
+
 float2 rot2(float2 p, float a) {
     float c = cos(a), s = sin(a);
     return float2(p.x * c - p.y * s, p.x * s + p.y * c);
@@ -60,7 +67,9 @@ float2 rot2(float2 p, float a) {
 //   2 = glowing warm yellow energy (white-hot core + amber rim)
 //   3 = glowing electric cyan crystal / neon / holo
 //   4 = brushed metallic steel (claws, crane, barrel)
-//   5 = glowing neon magenta/violet (Spawn inner well & trim)
+//   5 = glowing neon magenta/violet (Spawn well, Claimer spire/halo, Mineral/Extractor crystals)
+//   6 = glowing emerald healing green (Healer/Medic cross & emitter tips)
+//   7 = glowing fiery siege orange (Dismantler rotary saw core & teeth)
 //
 // mapScene returns float4(minDist, matID, dYellowEmissive, dCyanEmissive)
 void addMat(inout float4 res, float d, float matID) {
@@ -312,6 +321,121 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
             return res;
         }
 
+        // PIONEER / REMOTE BUILDER (flags == 11): Ruggedized chassis + amber beacon antenna + side cargo pack + wrench arm
+        if (flags > 10.5) {
+            float dome = sdEllipsoid(q - float3(0.0, 0.27, 0.0), float3(0.36, 0.28, 0.36));
+            dome = smax(dome, -q.y + 0.04, 0.025);
+            float collar = sdEllipsoid(q - float3(0.0, 0.09, 0.0), float3(0.38, 0.075, 0.38));
+            float pack = sdRoundBox(q - float3(-0.30, 0.25, 0.0), float3(0.16, 0.17, 0.24), 0.03);
+            float packStrip = sdRoundBox(q - float3(-0.46, 0.25, 0.0), float3(0.02, 0.07, 0.14), 0.008);
+            float mast = sdCapsule(q, float3(-0.28, 0.42, 0.14), float3(-0.28, 0.80, 0.14), 0.024);
+            float beacon = length(q - float3(-0.28, 0.84, 0.14)) - 0.062;
+            float arm1 = sdCapsule(q, float3(0.10, 0.34, 0.30), float3(0.34, 0.50, 0.30), 0.055);
+            float arm2 = sdCapsule(q, float3(0.34, 0.50, 0.30), float3(0.55, 0.30, 0.22), 0.048);
+            float jaw1 = sdCapsule(q, float3(0.55, 0.30, 0.22), float3(0.67, 0.24, 0.28), 0.036);
+            float jaw2 = sdCapsule(q, float3(0.55, 0.30, 0.22), float3(0.67, 0.19, 0.14), 0.036);
+            addMat(res, dome, 1.0);
+            addMat(res, min(collar, pack), 0.0);
+            addMat(res, min(mast, min(min(arm1, arm2), min(jaw1, jaw2))), 4.0);
+            addMat(res, min(packStrip, beacon), 2.0);
+            return res;
+        }
+
+        // MINERAL HARVESTER (flags == 10): Armored chassis + glowing violet crystal canisters + conical crystal drill
+        if (flags > 9.5) {
+            float body = sdRoundBox(q - float3(-0.08, 0.27, 0.0), float3(0.36, 0.21, 0.28), 0.06);
+            float collar = sdEllipsoid(q - float3(-0.04, 0.09, 0.0), float3(0.40, 0.075, 0.34));
+            float3 az = float3(q.x, q.y, abs(q.z));
+            float canister = sdCapsule(az, float3(-0.30, 0.28, 0.26), float3(0.06, 0.28, 0.26), 0.105);
+            float shroud = sdCapsule(q, float3(0.22, 0.24, 0.0), float3(0.38, 0.24, 0.0), 0.16);
+            // Tapered conical crystal auger pointing along +X
+            float3 dp = q - float3(0.40, 0.24, 0.0);
+            float drillFrac = clamp(dp.x / 0.34, 0.0, 1.0);
+            float drillR = lerp(0.135, 0.02, drillFrac);
+            float drill = max(length(dp.yz) - drillR, max(-dp.x, dp.x - 0.34));
+            addMat(res, min(body, collar), 0.0);
+            addMat(res, shroud, 4.0);
+            addMat(res, min(canister, drill), 5.0);
+            return res;
+        }
+
+        // CLAIMER / RESERVER (flags == 9): Tiered faction dome + tall central violet crystal spire + floating magenta halo
+        if (flags > 8.5) {
+            float base = sdEllipsoid(q - float3(0.0, 0.10, 0.0), float3(0.42, 0.085, 0.42));
+            float dome = sdEllipsoid(q - float3(0.0, 0.26, 0.0), float3(0.35, 0.24, 0.35));
+            dome = smax(dome, -q.y + 0.05, 0.025);
+            float ringBase = sdTorus(q - float3(0.0, 0.40, 0.0), float2(0.22, 0.042));
+            // Tall central purple crystal spire
+            float3 sp = q - float3(0.0, 0.42, 0.0);
+            float spire = sdPyramid4(sp, 0.125, 0.54);
+            // Floating rotating magenta energy halo ring around the spire
+            float3 hp = q - float3(0.0, 0.66 + 0.025 * sin(t * 3.8), 0.0);
+            hp.xz = rot2(hp.xz, t * 1.4);
+            float halo = sdTorus(hp, float2(0.32, 0.028));
+            addMat(res, base, 0.0);
+            addMat(res, dome, 1.0);
+            addMat(res, ringBase, 4.0);
+            addMat(res, min(spire, halo), 5.0);
+            return res;
+        }
+
+        // SKIRMISHER (flags == 8): Agile faction dome + slate shoulder pods + twin forward cyan-vented railguns
+        if (flags > 7.5) {
+            float dome = sdEllipsoid(q - float3(-0.04, 0.27, 0.0), float3(0.33, 0.25, 0.31));
+            dome = smax(dome, -q.y + 0.04, 0.025);
+            float collar = sdEllipsoid(q - float3(-0.04, 0.09, 0.0), float3(0.35, 0.07, 0.33));
+            float3 az = float3(q.x, q.y, abs(q.z));
+            float pod = sdRoundBox(az - float3(-0.06, 0.27, 0.34), float3(0.20, 0.14, 0.095), 0.03);
+            float barrel = sdRoundBox(az - float3(0.32, 0.27, 0.33), float3(0.30, 0.055, 0.055), 0.018);
+            float muzzle = sdRoundBox(az - float3(0.46, 0.27, 0.33), float3(0.14, 0.026, 0.062), 0.008);
+            float cap = sdEllipsoid(q - float3(-0.04, 0.49, 0.0), float3(0.14, 0.055, 0.14));
+            addMat(res, dome, 1.0);
+            addMat(res, min(collar, pod), 0.0);
+            addMat(res, barrel, 4.0);
+            addMat(res, min(muzzle, cap), 3.0);
+            return res;
+        }
+
+        // HEALER / MEDIC (flags == 7): Clean support dome + glowing emerald top cross + twin green nanite emitters
+        if (flags > 6.5) {
+            float dome = sdEllipsoid(q - float3(0.0, 0.27, 0.0), float3(0.38, 0.28, 0.38));
+            dome = smax(dome, -q.y + 0.04, 0.025);
+            float collar = sdEllipsoid(q - float3(0.0, 0.09, 0.0), float3(0.40, 0.075, 0.40));
+            // Glowing emerald medical cross recessed on crown
+            float cross1 = sdRoundBox(q - float3(0.0, 0.52, 0.0), float3(0.17, 0.035, 0.055), 0.012);
+            float cross2 = sdRoundBox(q - float3(0.0, 0.52, 0.0), float3(0.055, 0.035, 0.17), 0.012);
+            float3 az = float3(q.x, q.y, abs(q.z));
+            float pod = sdRoundBox(az - float3(0.02, 0.22, 0.39), float3(0.16, 0.10, 0.085), 0.025);
+            float nozzle = sdCapsule(az, float3(0.16, 0.22, 0.39), float3(0.36, 0.20, 0.36), 0.042);
+            float tip = length(az - float3(0.41, 0.19, 0.35)) - 0.058;
+            addMat(res, dome, 1.0);
+            addMat(res, min(collar, pod), 0.0);
+            addMat(res, nozzle, 4.0);
+            addMat(res, min(min(cross1, cross2), tip), 6.0);
+            return res;
+        }
+
+        // DISMANTLER (flags == 6): Heavy siege chassis + amber vents + front yoke + spinning orange rotary demolition saw!
+        if (flags > 5.5) {
+            float hull = sdRoundBox(q - float3(-0.10, 0.27, 0.0), float3(0.34, 0.20, 0.29), 0.05);
+            float collar = sdEllipsoid(q - float3(-0.08, 0.09, 0.0), float3(0.38, 0.075, 0.34));
+            float3 az = float3(q.x, q.y, abs(q.z));
+            float vent = sdRoundBox(az - float3(-0.14, 0.27, 0.32), float3(0.14, 0.08, 0.03), 0.012);
+            float yoke = sdCapsule(az, float3(0.16, 0.24, 0.24), float3(0.42, 0.24, 0.14), 0.052);
+            // Spinning circular saw blade in XY plane at front (x = 0.48)
+            float3 sp = q - float3(0.46, 0.24, 0.0);
+            sp.xy = rot2(sp.xy, t * 4.5);
+            float ang = atan2(sp.y, sp.x);
+            float tooth = 0.032 * sin(ang * 10.0);
+            float bladeDisc = max(length(sp.xy) - (0.22 + tooth), abs(sp.z) - 0.032);
+            float bladeHub = max(length(sp.xy) - 0.095, abs(sp.z) - 0.055);
+            addMat(res, min(hull, collar), 0.0);
+            addMat(res, yoke, 4.0);
+            addMat(res, vent, 2.0);
+            addMat(res, min(bladeDisc, bladeHub), 7.0);
+            return res;
+        }
+
         // Common rounded faction dome + dark base collar + recessed cap bezel + glowing yellow top cap
         float dome = sdEllipsoid(q - float3(0.0, 0.28, 0.0), float3(0.38, 0.31, 0.38));
         dome = smax(dome, -q.y + 0.04, 0.025);
@@ -381,7 +505,7 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
     }
 
     // 12. TOMBSTONE / RUIN: Rounded-arch dark-slate memorial headstone on rocky base with glowing cyan glyph!
-    {
+    if (kind < 12.5) {
         // Stepped rocky dark-slate pedestal mound + accent stones
         float mound = sdEllipsoid(p - float3(0.0, 0.06, 0.0), float3(0.56, 0.11, 0.46));
         mound = smax(mound, -p.y, 0.02);
@@ -407,6 +531,47 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
 
         addMat(res, hull, 0.0);
         addMat(res, glyph, 3.0);
+        return res;
+    }
+
+    // 13. EXTRACTOR: 3-legged dark-slate tripod mining rig arching over glowing purple mineral crystals!
+    {
+        float mound = sdEllipsoid(p - float3(0.0, 0.06, 0.0), float3(0.72, 0.12, 0.72));
+        mound = smax(mound, -p.y, 0.02);
+
+        // 3 heavy arched industrial tripod legs spaced at 120 degrees
+        float legs = 1e5;
+        float footPads = 1e5;
+        for (int i = 0; i < 3; i++) {
+            float a = float(i) * 2.0943951;
+            float2 d = float2(cos(a), sin(a));
+            float3 foot = float3(d.x * 0.62, 0.08, d.y * 0.62);
+            float3 knee = float3(d.x * 0.44, 0.56, d.y * 0.44);
+            float3 topP = float3(d.x * 0.16, 0.88, d.y * 0.16);
+            legs = min(legs, min(sdCapsule(p, foot, knee, 0.075), sdCapsule(p, knee, topP, 0.068)));
+            footPads = min(footPads, sdRoundBox(p - float3(d.x * 0.62, 0.06, d.y * 0.62), float3(0.11, 0.06, 0.11), 0.02));
+        }
+
+        // Central apex extraction collar + vertical extractor core with amber status bars
+        float head = sdRoundBox(p - float3(0.0, 0.88, 0.0), float3(0.19, 0.14, 0.19), 0.035);
+        float core = sdCapsule(p, float3(0.0, 0.46, 0.0), float3(0.0, 0.78, 0.0), 0.095);
+        float3 absXZ = float3(abs(p.x), p.y, abs(p.z));
+        float gauge = min(
+            sdRoundBox(absXZ - float3(0.195, 0.88, 0.0), float3(0.018, 0.07, 0.05), 0.006),
+            sdRoundBox(absXZ - float3(0.0, 0.88, 0.195), float3(0.05, 0.07, 0.018), 0.006)
+        );
+
+        // Glowing purple/violet mineral crystal spires underneath the rig
+        float c1 = sdPyramid4(p - float3(0.0, 0.06, 0.0), 0.17, 0.44);
+        float c2 = sdPyramid4(p - float3(-0.20, 0.05, 0.14), 0.12, 0.30);
+        float c3 = sdPyramid4(p - float3(0.20, 0.05, -0.12), 0.12, 0.32);
+        float c4 = sdPyramid4(p - float3(0.06, 0.05, 0.22), 0.10, 0.24);
+        float crystals = min(min(c1, c2), min(c3, c4));
+
+        addMat(res, min(min(mound, footPads), min(legs, head)), 0.0);
+        addMat(res, core, 4.0);
+        addMat(res, gauge, 2.0);
+        addMat(res, crystals, 5.0);
         return res;
     }
 }
@@ -661,13 +826,27 @@ float4 shade(ShaderInput i) {
         albedo *= (1.0 - 0.42 * crevice);
         roughness = 0.36;
         metallic = 0.72;
-    } else {
-        // 5: Neon magenta-violet Spawn well trim
+    } else if (hit.y < 5.5) {
+        // 5: Neon magenta-violet (Spawn trim, Claimer spire/halo, Mineral/Extractor crystals)
         float core = pow(ndv, 1.35);
         albedo = lerp(float3(0.76, 0.14, 0.92), float3(1.0, 0.70, 1.0), core);
         roughness = 0.22;
         metallic = 0.05;
-        emissiveCol = albedo * 0.82;
+        emissiveCol = albedo * 0.85;
+    } else if (hit.y < 6.5) {
+        // 6: Glowing emerald healing green (Healer/Medic medical cross & nanite emitters)
+        float core = pow(ndv, 1.35);
+        albedo = lerp(float3(0.08, 0.80, 0.36), float3(0.76, 1.0, 0.86), core);
+        roughness = 0.20;
+        metallic = 0.05;
+        emissiveCol = albedo * 0.90;
+    } else {
+        // 7: Glowing fiery siege orange (Dismantler rotary demolition saw)
+        float core = pow(ndv, 1.35);
+        albedo = lerp(float3(0.95, 0.32, 0.04), float3(1.0, 0.82, 0.42), core);
+        roughness = 0.24;
+        metallic = 0.28;
+        emissiveCol = lerp(float3(0.85, 0.26, 0.02), float3(1.15, 0.68, 0.20), core) * 0.85;
     }
 
     float specPow = lerp(80.0, 12.0, roughness);

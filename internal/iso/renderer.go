@@ -1678,13 +1678,23 @@ func creepRoleFlags(obj screeps.RoomObject) (hasAttack, hasHeal, hasWork, hasCar
 }
 
 func creepRoleFlag(obj screeps.RoomObject) float32 {
-	// Prefer explicit role prefix in creep name (e.g. "harvester_123", "R_hauler_456", "upgrader_789").
+	// Prefer explicit role prefix in creep name (e.g. "harvester_123", "R_skirmisher_456", "dismantler_789").
 	lower := strings.ToLower(obj.Name)
 	switch {
+	case strings.Contains(lower, "pioneer"), strings.Contains(lower, "remotebuilder"):
+		return 11
+	case strings.Contains(lower, "mineral"):
+		return 10
+	case strings.Contains(lower, "claimer"), strings.Contains(lower, "reserver"):
+		return 9
+	case strings.Contains(lower, "skirmisher"):
+		return 8
+	case strings.Contains(lower, "healer"), strings.Contains(lower, "medic"):
+		return 7
+	case strings.Contains(lower, "dismantler"):
+		return 6
 	case strings.Contains(lower, "defender"), strings.Contains(lower, "brawler"),
-		strings.Contains(lower, "skirmisher"), strings.Contains(lower, "medic"),
-		strings.Contains(lower, "guardian"), strings.Contains(lower, "assault"),
-		strings.Contains(lower, "healer"):
+		strings.Contains(lower, "guardian"), strings.Contains(lower, "assault"):
 		return 5
 	case strings.Contains(lower, "scout"):
 		return 4
@@ -1698,9 +1708,41 @@ func creepRoleFlag(obj screeps.RoomObject) float32 {
 		return 0
 	}
 	// Fallback: infer from body parts.
-	hasAttack, hasHeal, hasWork, hasCarry := creepRoleFlags(obj)
+	var hasMelee, hasRanged, hasHeal, hasWork, hasCarry, hasClaim, hasTough bool
+	if obj.Raw != nil {
+		if body, ok := obj.Raw["body"].([]any); ok {
+			for _, raw := range body {
+				if m, ok := raw.(map[string]any); ok {
+					switch m["type"] {
+					case "attack":
+						hasMelee = true
+					case "ranged_attack":
+						hasRanged = true
+					case "heal":
+						hasHeal = true
+					case "work":
+						hasWork = true
+					case "carry":
+						hasCarry = true
+					case "claim":
+						hasClaim = true
+					case "tough":
+						hasTough = true
+					}
+				}
+			}
+		}
+	}
 	switch {
-	case hasAttack || hasHeal:
+	case hasClaim:
+		return 9
+	case hasHeal && !hasMelee && !hasRanged:
+		return 7
+	case hasRanged && !hasMelee:
+		return 8
+	case hasWork && hasTough && !hasCarry && !hasMelee:
+		return 6
+	case hasMelee || hasRanged || hasHeal:
 		return 5
 	case !hasWork && !hasCarry:
 		return 4
@@ -1719,7 +1761,7 @@ func objectActionAngle(obj screeps.RoomObject, fx, fy float32) (float64, bool) {
 	if !ok || len(al) == 0 {
 		return 0, false
 	}
-	for _, key := range []string{"attack", "rangedAttack", "harvest", "upgradeController", "build", "repair", "heal", "rangedHeal", "transfer", "withdraw"} {
+	for _, key := range []string{"attack", "rangedAttack", "dismantle", "harvest", "upgradeController", "claimController", "reserveController", "attackController", "build", "repair", "heal", "rangedHeal", "transfer", "withdraw"} {
 		raw, exists := al[key]
 		if !exists || raw == nil {
 			continue
@@ -1827,13 +1869,15 @@ func sdfObjectKind(typ string) (kind float32, padX, padTop, padBot float32, ok b
 	case "container":
 		return 8, 1.25, 1.35, 0.72, true
 	case "creep", "powerCreep":
-		return 9, 1.40, 1.50, 0.75, true
+		return 9, 1.45, 1.72, 0.76, true
 	case "resource":
 		return 10, 1.10, 1.20, 0.65, true
 	case "constructedWall":
 		return 11, 1.35, 1.40, 0.72, true
 	case "tombstone", "ruin":
 		return 12, 1.30, 1.65, 0.72, true
+	case "extractor":
+		return 13, 1.55, 1.95, 0.82, true
 	default:
 		return 0, 0, 0, 0, false
 	}
