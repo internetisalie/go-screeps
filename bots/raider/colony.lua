@@ -1,6 +1,5 @@
 -- colony.lua: Object-oriented RaiderColony manager for an owned Raider room.
 -- Coordinates home defense, economy, scouting, synchronized raid wave spawning, planning, and HUD visuals.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

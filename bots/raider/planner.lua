@@ -1,7 +1,6 @@
 -- planner.lua: Compact, aggressive base layout planner for the Raider colony.
 -- Places source containers, fast roads, tight checkerboard extensions around spawn,
 -- defensive tower(s) + ramparts at RCL 3+, and storage at RCL 4+.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

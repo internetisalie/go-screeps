@@ -1,5 +1,4 @@
 -- defense.lua: Object-oriented room threat tracking, tower focus-fire, Safe Mode, and combat body builders.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

@@ -1,6 +1,5 @@
 -- main.lua: Object-oriented Aggressive Raider Screeps colony AI entry point.
 -- Modules: colony.lua, economy.lua, planner.lua, combat.lua.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

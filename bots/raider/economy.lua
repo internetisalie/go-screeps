@@ -1,6 +1,5 @@
 -- economy.lua: Object-oriented EconomyAgent for the Raider colony.
 -- Roles: harvester, hauler, builder, upgrader.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

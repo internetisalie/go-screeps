@@ -1,6 +1,5 @@
 -- colony.lua: Object-oriented Colony manager for an owned Screeps room.
 -- Coordinates defense, links, spawning, remote mining, counter-assaults, planning, and HUD visuals.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

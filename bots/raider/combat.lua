@@ -1,7 +1,6 @@
 -- combat.lua: Object-oriented CombatAgent for home defense, tower control,
 -- cross-room scouting, and synchronized raiding squads.
 -- Roles: defender, scout, brawler, skirmisher, medic.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

@@ -1,6 +1,5 @@
 -- roles.lua: Object-oriented colony creep role behaviors for Screeps.
 -- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler, assault, healer.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 

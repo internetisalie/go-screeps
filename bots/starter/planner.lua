@@ -1,5 +1,4 @@
 -- planner.lua: Object-oriented RCL 1-8 automated room planner for Screeps.
--- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 
