@@ -30,6 +30,11 @@ const (
 )
 
 // BotVM manages a single sandboxed golua (Lua 5.4) VM for one Screeps player.
+type storeRef struct {
+	room string
+	id   string
+}
+
 type BotVM struct {
 	Username  string
 	UserID    string
@@ -49,8 +54,10 @@ type BotVM struct {
 	// Per-tick state used by API bindings.
 	world     *engine.World
 	tickStart time.Time
-	objCache  map[string]*rt.Table
-	roomCache map[string]*rt.Table
+	objCache   map[string]*rt.Table
+	roomCache  map[string]*rt.Table
+	storeMeta  map[*rt.Table]storeRef
+	entityRoom map[string]string
 
 	// Reusable metatables.
 	roomMT    *rt.Table

@@ -13,14 +13,50 @@ import (
 	"go-screeps/internal/screeps"
 )
 
-// --- Table & argument helpers ---
+// --- Pre-interned rt.Value string keys & table helpers ---
+
+var internedKeys = func() map[string]rt.Value {
+	keys := []string{
+		"__index", "__call", "__id",
+		"id", "pos", "room", "roomName", "name", "x", "y",
+		"hits", "hitsMax", "my", "owner", "username", "store",
+		"structureType", "ticksToDecay", "fatigue", "spawning", "ticksToLive",
+		"body", "type", "boost", "memory", "needTime", "remainingTime",
+		"level", "progress", "progressTotal", "safeMode", "safeModeAvailable",
+		"safeModeCooldown", "ticksToDowngrade", "activateSafeMode",
+		"energy", "energyCapacity", "ticksToRegeneration",
+		"mineralType", "mineralAmount", "resourceType", "amount", "cooldown",
+		"energyAvailable", "energyCapacityAvailable", "visual", "controller",
+		"time", "rooms", "creeps", "spawns", "structures", "constructionSites",
+		"getObjectById", "cpu", "limit", "tickLimit", "bucket", "getUsed",
+		"map", "describeExits", "Memory", "Game", "PathFinder", "CostMatrix",
+		"new", "search", "range", "filter", "plainCost", "swampCost", "flee",
+		"maxOps", "maxRooms", "maxCost", "heuristicWeight", "roomCallback",
+		"path", "ops", "cost", "incomplete", "ignoreCreeps", "reusePath",
+		"dryRun", "color", "fill", "stroke", "strokeWidth", "width", "radius",
+		"opacity", "lineStyle", "font", "align",
+		"1", "3", "5", "7",
+	}
+	m := make(map[string]rt.Value, len(keys))
+	for _, k := range keys {
+		m[k] = rt.StringValue(k)
+	}
+	return m
+}()
+
+func strKey(key string) rt.Value {
+	if v, ok := internedKeys[key]; ok {
+		return v
+	}
+	return rt.StringValue(key)
+}
 
 func tblGet(t *rt.Table, key string) rt.Value {
-	return t.Get(rt.StringValue(key))
+	return t.Get(strKey(key))
 }
 
 func tblSet(t *rt.Table, key string, val rt.Value) {
-	t.Set(rt.StringValue(key), val)
+	t.Set(strKey(key), val)
 }
 
 func tblGetInt(t *rt.Table, idx int) rt.Value {
@@ -408,8 +444,10 @@ func (vm *BotVM) injectPathFinder() {
 
 // refreshGame rebuilds the global Game table from world for this VM's UserID.
 func (vm *BotVM) refreshGame(world *engine.World) {
-	vm.objCache = make(map[string]*rt.Table)
-	vm.roomCache = make(map[string]*rt.Table)
+	vm.objCache = make(map[string]*rt.Table, 64)
+	vm.roomCache = make(map[string]*rt.Table, 8)
+	vm.storeMeta = make(map[*rt.Table]storeRef, 64)
+	vm.entityRoom = make(map[string]string, 128)
 
 	game := rt.NewTable()
 	roomsTbl := rt.NewTable()
@@ -614,7 +652,7 @@ func (vm *BotVM) getOrCreateRoomMemory(roomName string) *rt.Table {
 // --- Object wrapping ---
 
 func (vm *BotVM) newRoomPosition(x, y int, roomName string) *rt.Table {
-	t := rt.NewTable()
+	t := rt.NewTableWithCapacity(0, 3)
 	tblSet(t, "x", rt.IntValue(int64(x)))
 	tblSet(t, "y", rt.IntValue(int64(y)))
 	tblSet(t, "roomName", rt.StringValue(roomName))
@@ -623,7 +661,7 @@ func (vm *BotVM) newRoomPosition(x, y int, roomName string) *rt.Table {
 }
 
 func (vm *BotVM) newRoomVisual(roomName string) *rt.Table {
-	t := rt.NewTable()
+	t := rt.NewTableWithCapacity(0, 1)
 	tblSet(t, "roomName", rt.StringValue(roomName))
 	t.SetMetatable(vm.visualMT)
 	return t
@@ -643,17 +681,18 @@ func (vm *BotVM) newRoomTerrain(roomName string) rt.Value {
 }
 
 func (vm *BotVM) newStore(e *engine.Entity) *rt.Table {
-	t := rt.NewTable()
+	t := rt.NewTableWithCapacity(0, 2+len(e.Store))
 	if e.Capacity(engine.RESOURCE_ENERGY) > 0 {
 		tblSet(t, engine.RESOURCE_ENERGY, rt.IntValue(int64(e.UsedCapacity(engine.RESOURCE_ENERGY))))
 	}
 	for res, amt := range e.Store {
 		tblSet(t, res, rt.IntValue(int64(amt)))
 	}
-	mt := rt.NewTable()
-	tblSet(mt, "__index", tblGet(vm.storeMT, "__index"))
-	tblSet(mt, "__id", rt.StringValue(e.ID))
-	t.SetMetatable(mt)
+	t.SetMetatable(vm.storeMT)
+	if vm.storeMeta == nil {
+		vm.storeMeta = make(map[*rt.Table]storeRef, 64)
+	}
+	vm.storeMeta[t] = storeRef{room: e.Room, id: e.ID}
 	return t
 }
 
@@ -708,10 +747,20 @@ func (vm *BotVM) wrapEntityByID(id string) *rt.Table {
 
 	vm.world.RLock()
 	var e *engine.Entity
-	for _, r := range vm.world.Rooms {
-		if found, ok := r.Entities[id]; ok {
-			e = found
-			break
+	if rn, ok := vm.entityRoom[id]; ok {
+		if r := vm.world.Rooms[rn]; r != nil {
+			e = r.Entities[id]
+		}
+	}
+	if e == nil {
+		for _, r := range vm.world.Rooms {
+			if found, ok := r.Entities[id]; ok {
+				e = found
+				if vm.entityRoom != nil {
+					vm.entityRoom[id] = r.Name
+				}
+				break
+			}
 		}
 	}
 	if e == nil {
@@ -1113,77 +1162,85 @@ func (vm *BotVM) posFindClosestByRange(t *rt.Thread, c *rt.GoCont) (rt.Cont, err
 
 // --- Store methods ---
 
-func (vm *BotVM) storeEntityID(c *rt.GoCont) (string, error) {
+func (vm *BotVM) storeEntityRef(c *rt.GoCont) (storeRef, error) {
 	self, err := checkTable(c, 0)
 	if err != nil {
-		return "", err
+		return storeRef{}, err
 	}
-	mt := self.Metatable()
-	if mt == nil {
-		return "", nil
+	if ref, ok := vm.storeMeta[self]; ok {
+		return ref, nil
 	}
-	id, _ := tblGet(mt, "__id").TryString()
-	return id, nil
+	return storeRef{}, nil
+}
+
+func (vm *BotVM) findStoreEntityLocked(ref storeRef) *engine.Entity {
+	if ref.id == "" {
+		return nil
+	}
+	if ref.room != "" {
+		if r := vm.world.Rooms[ref.room]; r != nil {
+			if e, ok := r.Entities[ref.id]; ok {
+				return e
+			}
+		}
+	}
+	for _, r := range vm.world.Rooms {
+		if e, ok := r.Entities[ref.id]; ok {
+			return e
+		}
+	}
+	return nil
 }
 
 func (vm *BotVM) storeGetUsedCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
-	id, err := vm.storeEntityID(c)
+	ref, err := vm.storeEntityRef(c)
 	if err != nil {
 		return nil, err
 	}
 	res := optString(c, 1, "")
-	if id == "" || vm.world == nil {
+	if ref.id == "" || vm.world == nil {
 		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
-	for _, r := range vm.world.Rooms {
-		if e, ok := r.Entities[id]; ok {
-			val = e.UsedCapacity(res)
-			break
-		}
+	if e := vm.findStoreEntityLocked(ref); e != nil {
+		val = e.UsedCapacity(res)
 	}
 	vm.world.RUnlock()
 	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
 }
 
 func (vm *BotVM) storeGetFreeCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
-	id, err := vm.storeEntityID(c)
+	ref, err := vm.storeEntityRef(c)
 	if err != nil {
 		return nil, err
 	}
 	res := optString(c, 1, "")
-	if id == "" || vm.world == nil {
+	if ref.id == "" || vm.world == nil {
 		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
-	for _, r := range vm.world.Rooms {
-		if e, ok := r.Entities[id]; ok {
-			val = e.FreeCapacity(res)
-			break
-		}
+	if e := vm.findStoreEntityLocked(ref); e != nil {
+		val = e.FreeCapacity(res)
 	}
 	vm.world.RUnlock()
 	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
 }
 
 func (vm *BotVM) storeGetCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
-	id, err := vm.storeEntityID(c)
+	ref, err := vm.storeEntityRef(c)
 	if err != nil {
 		return nil, err
 	}
 	res := optString(c, 1, "")
-	if id == "" || vm.world == nil {
+	if ref.id == "" || vm.world == nil {
 		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
-	for _, r := range vm.world.Rooms {
-		if e, ok := r.Entities[id]; ok {
-			val = e.Capacity(res)
-			break
-		}
+	if e := vm.findStoreEntityLocked(ref); e != nil {
+		val = e.Capacity(res)
 	}
 	vm.world.RUnlock()
 	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
