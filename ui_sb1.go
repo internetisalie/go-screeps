@@ -20,6 +20,15 @@ import (
 	"github.com/bankai-tensei/gowaku/widgets/control"
 	"github.com/bankai-tensei/gowaku/widgets/field"
 	"github.com/bankai-tensei/gowaku/widgets/interact"
+	"github.com/bankai-tensei/gowaku/widgets/overlay"
+)
+
+// Cached vector icon paths (kept stable for gowaku's icon atlas).
+var (
+	sbIconPlay  = iconPlay()
+	sbIconPause = iconPause()
+	sbIconStep  = iconStep()
+	sbIconReset = iconReset()
 )
 
 // SB-1 dark sci-fi telemetry palette matching docs/mockups/SB-1.jpg.
@@ -67,6 +76,70 @@ func sbPill(label string, active bool, onTap func(), th *theme.Theme) core.Widge
 	return interact.GestureDetector{
 		OnTap: onTap,
 		Child: pill,
+	}
+}
+
+// sbRadioGroup wraps segments inside a single unified recessed track container
+// so they read unmistakably as a mutually-exclusive segmented radio control.
+func sbRadioGroup(items ...core.Widget) core.Widget {
+	return basic.Container{
+		Color:   geom.Hex(0x0d1520),
+		Padding: geom.All(2),
+		Radius:  6,
+		Border:  paint.Stroke{Width: 1, Color: colPillIdleBd},
+		Child: basic.Row{
+			Size:     layout.MainMin,
+			Cross:    layout.CrossCenter,
+			Spacing:  1,
+			Children: items,
+		},
+	}
+}
+
+func sbRadioTextItem(label string, active bool, onTap func(), th *theme.Theme) core.Widget {
+	bg := geom.Color{}
+	fg := colTextMuted
+	if active {
+		bg = colPillActBg
+		fg = geom.Hex(0xffffff)
+	}
+	return interact.GestureDetector{
+		OnTap: onTap,
+		Child: basic.Container{
+			Color:   bg,
+			Padding: geom.Symmetric(9, 4),
+			Radius:  4,
+			Child: basic.Text{
+				Content: label,
+				Style:   th.Text.Caption.WithColor(fg),
+			},
+		},
+	}
+}
+
+func sbRadioIconItem(icon *paint.Path, tooltip string, active bool, onTap func()) core.Widget {
+	bg := geom.Color{}
+	fg := colTextMuted
+	if active {
+		bg = colPillActBg
+		fg = geom.Hex(0xffffff)
+	}
+	return overlay.Tooltip{
+		Message: tooltip,
+		Child: interact.GestureDetector{
+			OnTap: onTap,
+			Child: basic.Container{
+				Color:   bg,
+				Padding: geom.Symmetric(8, 4),
+				Radius:  4,
+				Child: basic.Icon{
+					Path:  icon,
+					Size:  14,
+					Color: fg,
+					Label: tooltip,
+				},
+			},
+		},
 	}
 }
 
@@ -228,28 +301,28 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 	var children []core.Widget
 
 	if s.localRunner != nil {
-		pauseLbl := "|| Pause"
-		pauseActive := !s.localRunner.Paused()
-		if s.localRunner.Paused() {
-			pauseLbl = "▶ Play"
-		}
-		children = append(children,
-			sbPill(pauseLbl, pauseActive, func() {
-				s.SetState(func() { s.localRunner.SetPaused(!s.localRunner.Paused()) })
-			}, th),
-			sbPill("▶| Step", false, func() {
+		paused := s.localRunner.Paused()
+		// Unified playback icon radio group: Pause | Play | Step
+		children = append(children, sbRadioGroup(
+			sbRadioIconItem(sbIconPause, "Pause (Space)", paused, func() {
+				s.SetState(func() { s.localRunner.SetPaused(true) })
+			}),
+			sbRadioIconItem(sbIconPlay, "Play (Space)", !paused, func() {
+				s.SetState(func() { s.localRunner.SetPaused(false) })
+			}),
+			sbRadioIconItem(sbIconStep, "Step +1 tick (.)", false, func() {
 				s.localRunner.StepTick()
 				s.SetState(func() { s.applySnapshot(s.provider.Snapshot()) })
 				s.signal.Notify()
-			}, th),
-		)
+			}),
+		))
 
-		// Segmented speed pills (1x, 2x, 5x, 10x, 25x, Max)
-		var speedPills []core.Widget
+		// Unified segmented speed radio group: 1x | 2x | 5x | 10x | 25x | Max
+		var speedItems []core.Widget
 		for idx, spd := range localSpeeds {
 			i := idx
 			sp := spd
-			speedPills = append(speedPills, sbPill(sp.label, s.speedIdx == i, func() {
+			speedItems = append(speedItems, sbRadioTextItem(sp.label, s.speedIdx == i, func() {
 				s.SetState(func() {
 					s.speedIdx = i
 					s.localRunner.SetTickPeriod(sp.period)
@@ -257,17 +330,30 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 				})
 			}, th))
 		}
-		children = append(children, basic.Row{
-			Size:     layout.MainMin,
-			Cross:    layout.CrossCenter,
-			Spacing:  2,
-			Children: speedPills,
-		})
+		children = append(children, sbRadioGroup(speedItems...))
 
-		children = append(children, sbPill("↺ Reset", false, func() {
-			s.SetState(func() { s.startLocalSim(true) })
-			s.signal.Notify()
-		}, th))
+		// Reset icon button
+		children = append(children, overlay.Tooltip{
+			Message: "Reset simulation",
+			Child: interact.GestureDetector{
+				OnTap: func() {
+					s.SetState(func() { s.startLocalSim(true) })
+					s.signal.Notify()
+				},
+				Child: basic.Container{
+					Color:   colPillIdleBg,
+					Padding: geom.Symmetric(8, 5),
+					Radius:  5,
+					Border:  paint.Stroke{Width: 1, Color: colPillIdleBd},
+					Child: basic.Icon{
+						Path:  sbIconReset,
+						Size:  14,
+						Color: colTextBright,
+						Label: "Reset simulation",
+					},
+				},
+			},
+		})
 	}
 
 	yawDeg := ((int(math.Round(float64(s.cam.YawRadians())*180/math.Pi)) % 360) + 360) % 360
@@ -454,18 +540,33 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 
 	sections = append(sections, basic.Container{Color: colBorderDim, Height: 1})
 
-	// 3. Minimap (Empire) — collapsible 5x5 sector grid centered on s.snap.Room
+	// 3. Minimap (Empire) — collapsible graphical 5x5 sector radar centered on s.snap.Room
 	mmArrow := "▾ "
 	if s.collapseMinimap {
 		mmArrow = "▸ "
+	}
+	mmLabel := s.hoverMinimapRoom
+	if mmLabel == "" {
+		mmLabel = s.snap.Room
 	}
 	sections = append(sections, interact.GestureDetector{
 		OnTap: func() { s.SetState(func() { s.collapseMinimap = !s.collapseMinimap }) },
 		Child: basic.Container{
 			Padding: geom.Symmetric(2, 2),
-			Child: basic.Text{
-				Content: mmArrow + "Minimap (Empire)",
-				Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
+			Child: basic.Row{
+				Cross: layout.CrossCenter,
+				Children: []core.Widget{
+					basic.Expanded{
+						Child: basic.Text{
+							Content: mmArrow + "Minimap (Empire)",
+							Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
+						},
+					},
+					basic.Text{
+						Content: mmLabel,
+						Style:   th.Text.Caption.WithColor(colCyan),
+					},
+				},
 			},
 		},
 	})
@@ -567,93 +668,241 @@ func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) cor
 	}
 }
 
-func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
-	// Map room -> owner username from LocalRunner world (when local).
-	owners := make(map[string]string)
+type minimapPainter struct {
+	state *viewerState
+}
+
+func mmFill(col geom.Color) paint.Paint {
+	return paint.Paint{Color: col}
+}
+
+func mmStroke(w float32, col geom.Color) paint.Paint {
+	return paint.Paint{Stroke: &paint.Stroke{Width: w, Color: col}}
+}
+
+func (p *minimapPainter) Paint(c *paint.Canvas, sz geom.Size) {
+	if sz.W <= 0 || sz.H <= 0 {
+		return
+	}
+	const gridN = 5
+	cellW := sz.W / gridN
+	cellH := sz.H / gridN
+
+	// Deep tactical radar backdrop.
+	c.DrawRect(geom.Rect{W: sz.W, H: sz.H}, mmFill(geom.Hex(0x09111a)))
+
+	var w *engine.World
 	var primaryOwner string
-	if s.localRunner != nil {
-		summaries := s.localRunner.BotSummaries()
-		if len(summaries) > 0 {
-			primaryOwner = summaries[0].Username
+	if p.state.localRunner != nil {
+		w = p.state.localRunner.World()
+		if sums := p.state.localRunner.BotSummaries(); len(sums) > 0 {
+			primaryOwner = sums[0].Username
 		}
-		w := s.localRunner.World()
+	}
+
+	if w != nil {
 		w.RLock()
-		for rName, rm := range w.Rooms {
-			if ctrl := rm.FindController(); ctrl != nil && ctrl.User != "" {
-				owners[rName] = w.Users[ctrl.User]
+	}
+
+	// Render terrain + territory + entity blips for each room in the 5x5 sector.
+	const subN = 10 // 10x10 downsampled terrain blocks per 50x50 room
+	subW := cellW / subN
+	subH := cellH / subN
+	step := iso.GridSize / subN
+
+	for dy := -2; dy <= 2; dy++ {
+		for dx := -2; dx <= 2; dx++ {
+			col := dx + 2
+			row := dy + 2
+			ox := float32(col) * cellW
+			oy := float32(row) * cellH
+
+			rName, ok := engine.AdjacentRoomName(p.state.snap.Room, dx, dy)
+			if !ok {
+				continue
+			}
+
+			var rm *engine.Room
+			if w != nil {
+				rm = w.Rooms[rName]
+			}
+			if rm != nil && len(rm.Terrain) >= iso.GridSize*iso.GridSize {
+				// Downsample 50x50 terrain into 10x10 glowing emerald/slate radar cells.
+				for sy := 0; sy < subN; sy++ {
+					for sx := 0; sx < subN; sx++ {
+						walls, swamps := 0, 0
+						for ty := sy * step; ty < (sy+1)*step; ty++ {
+							base := ty * iso.GridSize
+							for tx := sx * step; tx < (sx+1)*step; tx++ {
+								t := rm.Terrain[base+tx]
+								if t&engine.TERRAIN_MASK_WALL != 0 {
+									walls++
+								} else if t&engine.TERRAIN_MASK_SWAMP != 0 {
+									swamps++
+								}
+							}
+						}
+						var tileCol geom.Color
+						switch {
+						case walls >= (step*step)/2:
+							tileCol = geom.Hex(0x091019) // dark wall mass
+						case swamps >= 5:
+							tileCol = geom.Hex(0x1e7a4d) // glowing emerald swamp patch (SB-1)
+						case swamps > 0:
+							tileCol = geom.Hex(0x144e34)
+						default:
+							tileCol = geom.Hex(0x132234) // walkable plain
+						}
+						c.DrawRect(geom.Rect{
+							X: ox + float32(sx)*subW,
+							Y: oy + float32(sy)*subH,
+							W: subW + 0.4,
+							H: subH + 0.4,
+						}, mmFill(tileCol))
+					}
+				}
+
+				// Subtle territory wash for owned rooms.
+				if ctrl := rm.FindController(); ctrl != nil && ctrl.User != "" {
+					ownerName := w.Users[ctrl.User]
+					wash := geom.RGBA(0.66, 0.33, 0.97, 0.22) // rival purple
+					if ownerName == primaryOwner {
+						wash = geom.RGBA(0.22, 0.74, 0.97, 0.16) // friendly cyan
+					}
+					c.DrawRect(geom.Rect{X: ox, Y: oy, W: cellW, H: cellH}, mmFill(wash))
+				}
+
+				// Plot structures, sources, and creeps as crisp tactical blips.
+				for _, e := range rm.Entities {
+					px := ox + (float32(e.X)+0.5)/iso.GridSize*cellW
+					py := oy + (float32(e.Y)+0.5)/iso.GridSize*cellH
+					var blipCol geom.Color
+					var bsz float32 = 2.0
+					switch e.Type {
+					case engine.TYPE_SOURCE:
+						blipCol = geom.Hex(0xfbbf24)
+						bsz = 2.2
+					case engine.STRUCTURE_SPAWN, engine.STRUCTURE_CONTROLLER:
+						bsz = 3.2
+						if e.User == "" {
+							blipCol = geom.Hex(0x64748b)
+						} else if w.Users[e.User] == primaryOwner {
+							blipCol = geom.Hex(0x38bdf8)
+						} else {
+							blipCol = geom.Hex(0xc084fc)
+						}
+					case engine.TYPE_CREEP, engine.STRUCTURE_TOWER, engine.STRUCTURE_EXTENSION, engine.STRUCTURE_STORAGE:
+						bsz = 2.0
+						if w.Users[e.User] == primaryOwner {
+							blipCol = geom.Hex(0x4ade80)
+						} else if e.User != "" {
+							blipCol = geom.Hex(0xf87171)
+						} else {
+							continue
+						}
+					default:
+						continue
+					}
+					c.DrawRect(geom.Rect{X: px - bsz/2, Y: py - bsz/2, W: bsz, H: bsz}, mmFill(blipCol))
+				}
+			}
+
+			// Hover highlight cell.
+			if rName != "" && rName == p.state.hoverMinimapRoom {
+				c.DrawRect(geom.Rect{X: ox + 0.5, Y: oy + 0.5, W: cellW - 1, H: cellH - 1},
+					mmStroke(1, geom.RGBA(0.58, 0.80, 0.99, 0.65)))
 			}
 		}
+	}
+
+	if w != nil {
 		w.RUnlock()
 	}
 
-	var rows []core.Widget
-	for dy := -2; dy <= 2; dy++ {
-		var cells []core.Widget
-		for dx := -2; dx <= 2; dx++ {
-			rName, ok := engine.AdjacentRoomName(s.snap.Room, dx, dy)
-			if !ok {
-				rName = ""
-			}
-			bg := geom.Hex(0x131d2b)
-			bd := colBorderDim
-			bdW := float32(1)
-			fg := colTextMuted
-			if owner := owners[rName]; owner != "" {
-				fg = colTextBright
-				if owner == primaryOwner {
-					bg = geom.Hex(0x16385c)
-					bd = colBorderFocus
-				} else {
-					bg = geom.Hex(0x3a1d42)
-					bd = geom.Hex(0xa855f7)
-				}
-			}
-			if dx == 0 && dy == 0 {
-				bd = colCyan
-				bdW = 2
-				fg = colCyan
-			}
-			target := rName
-			cell := basic.Expanded{
-				Child: interact.GestureDetector{
-					OnTap: func() {
-						if target != "" {
+	// Faint tactical radar gridlines (room boundaries + subtle 2x sub-lines).
+	subGrid := mmFill(geom.RGBA(0.18, 0.30, 0.44, 0.22))
+	roomGrid := mmFill(geom.RGBA(0.22, 0.36, 0.52, 0.50))
+	for i := 1; i < gridN*2; i++ {
+		pt := subGrid
+		if i%2 == 0 {
+			pt = roomGrid
+		}
+		x := float32(i) * (cellW / 2)
+		y := float32(i) * (cellH / 2)
+		c.DrawRect(geom.Rect{X: x, Y: 0, W: 1, H: sz.H}, pt)
+		c.DrawRect(geom.Rect{X: 0, Y: y, W: sz.W, H: 1}, pt)
+	}
+
+	// Glowing cyan viewport reticle centered on the active room (dx=0, dy=0), matching SB-1.jpg.
+	cx := 2 * cellW
+	cy := 2 * cellH
+	c.DrawRect(geom.Rect{X: cx, Y: cy, W: cellW, H: cellH}, mmFill(geom.RGBA(0.22, 0.74, 0.97, 0.14)))
+	c.DrawRect(geom.Rect{X: cx + 1, Y: cy + 1, W: cellW - 2, H: cellH - 2}, mmStroke(1.5, colCyan))
+
+	// Bright cyan corner brackets & edge crosshair ticks on active room reticle.
+	tickCol := mmFill(geom.Hex(0x7dd3fc))
+	const brk = float32(7)
+	const thk = float32(2)
+	// Top-left bracket
+	c.DrawRect(geom.Rect{X: cx, Y: cy, W: brk, H: thk}, tickCol)
+	c.DrawRect(geom.Rect{X: cx, Y: cy, W: thk, H: brk}, tickCol)
+	// Top-right bracket
+	c.DrawRect(geom.Rect{X: cx + cellW - brk, Y: cy, W: brk, H: thk}, tickCol)
+	c.DrawRect(geom.Rect{X: cx + cellW - thk, Y: cy, W: thk, H: brk}, tickCol)
+	// Bottom-left bracket
+	c.DrawRect(geom.Rect{X: cx, Y: cy + cellH - thk, W: brk, H: thk}, tickCol)
+	c.DrawRect(geom.Rect{X: cx, Y: cy + cellH - brk, W: thk, H: brk}, tickCol)
+	// Bottom-right bracket
+	c.DrawRect(geom.Rect{X: cx + cellW - brk, Y: cy + cellH - thk, W: brk, H: thk}, tickCol)
+	c.DrawRect(geom.Rect{X: cx + cellW - thk, Y: cy + cellH - brk, W: thk, H: brk}, tickCol)
+	// 4 outer edge crosshair ticks
+	c.DrawRect(geom.Rect{X: cx + cellW/2 - 1, Y: cy - 4, W: 2, H: 4}, tickCol)
+	c.DrawRect(geom.Rect{X: cx + cellW/2 - 1, Y: cy + cellH, W: 2, H: 4}, tickCol)
+	c.DrawRect(geom.Rect{X: cx - 4, Y: cy + cellH/2 - 1, W: 4, H: 2}, tickCol)
+	c.DrawRect(geom.Rect{X: cx + cellW, Y: cy + cellH/2 - 1, W: 4, H: 2}, tickCol)
+}
+
+func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
+	const mmW = float32(266)
+	const mmH = float32(216)
+
+	roomAt := func(pos geom.Offset) string {
+		if pos.X < 0 || pos.Y < 0 || pos.X >= mmW || pos.Y >= mmH {
+			return ""
+		}
+		dx := int(pos.X/(mmW/5)) - 2
+		dy := int(pos.Y/(mmH/5)) - 2
+		if rName, ok := engine.AdjacentRoomName(s.snap.Room, dx, dy); ok {
+			return rName
+		}
+		return ""
+	}
+
+	return basic.Container{
+		Color:  geom.Hex(0x09111a),
+		Radius: 7,
+		Border: paint.Stroke{Width: 1, Color: colBorderDim},
+		Child: basic.SizedBox{
+			Width:  mmW,
+			Height: mmH,
+			Child: interact.Listener{
+				OnPointer: func(e *core.PointerEvent) {
+					switch e.Kind {
+					case core.PointerDown:
+						if target := roomAt(e.Pos); target != "" && target != s.snap.Room {
 							s.switchRoom(target)
 						}
-					},
-					Child: basic.Container{
-						Color:   bg,
-						Padding: geom.Symmetric(1, 6),
-						Radius:  4,
-						Border:  paint.Stroke{Width: bdW, Color: bd},
-						Child: basic.Align{
-							Alignment: layout.AlignCenter,
-							Child: basic.Text{
-								Content: rName,
-								Style:   th.Text.Caption.WithSize(9.5).WithMaxLines(1).WithColor(fg),
-							},
-						},
-					},
+					case core.PointerMove:
+						if hr := roomAt(e.Pos); hr != s.hoverMinimapRoom {
+							s.SetState(func() { s.hoverMinimapRoom = hr })
+						}
+					}
 				},
-			}
-			cells = append(cells, cell)
-		}
-		rows = append(rows, basic.Row{
-			Cross:    layout.CrossCenter,
-			Spacing:  3,
-			Children: cells,
-		})
-	}
-	return basic.Container{
-		Color:   colPanelBg,
-		Padding: geom.All(6),
-		Radius:  7,
-		Border:  paint.Stroke{Width: 1, Color: colBorderDim},
-		Child: basic.Column{
-			Size:     layout.MainMin,
-			Cross:    layout.CrossStretch,
-			Spacing:  3,
-			Children: rows,
+				Child: control.CustomPaint{
+					Painter: &minimapPainter{state: s},
+					Repaint: &s.signal,
+				},
+			},
 		},
 	}
 }
@@ -721,24 +970,67 @@ func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 		})
 	}
 
-	// 4 Directional Edge Room Navigation Pills (when not in Zen mode)
+	// 4 Directional Edge Room Navigation Pills aligned to the true isometric room edges (rotates with camera yaw).
 	if !s.zenMode {
-		addEdgePill := func(dx, dy int, prefix, suffix string, align layout.Alignment) {
-			if adj, ok := engine.AdjacentRoomName(s.snap.Room, dx, dy); ok {
-				target := adj
-				layers = append(layers, basic.Align{
-					Alignment: align,
-					Child: basic.Container{
-						Padding: geom.All(8),
-						Child:   sbPill(prefix+adj+suffix, false, func() { s.switchRoom(target) }, th),
-					},
-				})
+		cosY, sinY := s.cam.YawCosSin()
+		compassArrow := func(sx, sy float32) string {
+			ang := math.Atan2(float64(sy), float64(sx)) * 180 / math.Pi
+			if ang < 0 {
+				ang += 360
+			}
+			switch {
+			case ang < 22.5 || ang >= 337.5:
+				return "→"
+			case ang < 67.5:
+				return "↘"
+			case ang < 112.5:
+				return "↓"
+			case ang < 157.5:
+				return "↙"
+			case ang < 202.5:
+				return "←"
+			case ang < 247.5:
+				return "↖"
+			case ang < 292.5:
+				return "↑"
+			default:
+				return "↗"
 			}
 		}
-		addEdgePill(0, -1, "▲ ", "", layout.AlignTopCenter)
-		addEdgePill(0, 1, "▼ ", "", layout.AlignBottomCenter)
-		addEdgePill(-1, 0, "◀ ", "", layout.AlignCenterLeft)
-		addEdgePill(1, 0, "", " ▶", layout.AlignCenterRight)
+		for _, dir := range [][2]int{{0, -1}, {1, 0}, {0, 1}, {-1, 0}} {
+			dx, dy := dir[0], dir[1]
+			adj, ok := engine.AdjacentRoomName(s.snap.Room, dx, dy)
+			if !ok {
+				continue
+			}
+			// Project unit neighbor direction through camera yaw + isometric basis.
+			rx := float32(dx)*cosY - float32(dy)*sinY
+			ry := float32(dx)*sinY + float32(dy)*cosY
+			sx := (rx - ry) * (iso.BaseW / 2)
+			sy := (rx + ry) * (iso.BaseH / 2)
+			mag := float32(math.Hypot(float64(sx), float64(sy)))
+			if mag <= 0 {
+				continue
+			}
+			ux, uy := sx/mag, sy/mag
+			// Map unit screen direction onto the viewport perimeter [0..1]x[0..1],
+			// inset slightly so diagonal pills sit cleanly along the 4 isometric edges.
+			ax := geom.Clamp32(0.5+ux*0.44, 0.04, 0.96)
+			ay := geom.Clamp32(0.5+uy*0.44, 0.04, 0.96)
+			arr := compassArrow(sx, sy)
+			label := arr + " " + adj
+			if sx > 0 {
+				label = adj + " " + arr
+			}
+			target := adj
+			layers = append(layers, basic.Align{
+				Alignment: layout.Alignment{X: ax, Y: ay},
+				Child: basic.Container{
+					Padding: geom.All(6),
+					Child:   sbPill(label, false, func() { s.switchRoom(target) }, th),
+				},
+			})
+		}
 	}
 
 	// Bottom-left Hover Quick-Inspect Card (UC-3.1)

@@ -111,6 +111,7 @@ type viewerState struct {
 	followCam        bool
 	selectedStackIdx int
 	hoverRoom        string
+	hoverMinimapRoom string
 	collapseEvents   bool
 	collapseMinimap  bool
 }
