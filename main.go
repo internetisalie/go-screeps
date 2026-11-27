@@ -1501,8 +1501,13 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			dynRows = append(dynRows, basic.Row{
 				Size:    layout.MainMin,
 				Cross:   layout.CrossCenter,
-				Spacing: 4,
+				Spacing: 5,
 				Children: []core.Widget{
+					basic.SizedBox{
+						Width:  14,
+						Height: 14,
+						Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: sbIconTarget, color: colCyan}},
+					},
 					basic.Text{
 						Content: "Action:",
 						Style:   th.Text.Caption.WithColor(colTextMuted),
@@ -1528,9 +1533,23 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 					Cross:   layout.CrossStretch,
 					Spacing: 4,
 					Children: []core.Widget{
-						basic.Text{
-							Content: memHeader,
-							Style:   th.Text.Caption.WithSize(10.5).WithColor(colTextMuted),
+						basic.Row{
+							Size:    layout.MainMin,
+							Cross:   layout.CrossCenter,
+							Spacing: 5,
+							Children: []core.Widget{
+								basic.SizedBox{
+									Width:  13,
+									Height: 13,
+									Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: sbIconMemory, color: geom.Hex(0x93c5fd)}},
+								},
+								basic.Expanded{
+									Child: basic.Text{
+										Content: memHeader,
+										Style:   th.Text.Caption.WithSize(10.5).WithColor(colTextMuted),
+									},
+								},
+							},
 						},
 						basic.Text{
 							Content: creepMemJSON,
