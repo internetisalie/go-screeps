@@ -3,12 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local OK <const> = screeps.OK
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
-local COST <const> = screeps.COST
-local RESOURCE <const> = screeps.RESOURCE
-local STRUCTURE <const> = screeps.STRUCTURE
 
 local planner <const> = require("planner")
 local DefenseManager <const> = require("defense")
@@ -18,10 +12,10 @@ local SCOUT_INTEL_TTL <const> = 1500
 
 ---@type table<integer, FindConstant>
 local EXIT_DIRS <const> = {
-    [1] = FIND.EXIT_TOP,
-    [3] = FIND.EXIT_RIGHT,
-    [5] = FIND.EXIT_BOTTOM,
-    [7] = FIND.EXIT_LEFT,
+    [1] = screeps.FIND.EXIT_TOP,
+    [3] = screeps.FIND.EXIT_RIGHT,
+    [5] = screeps.FIND.EXIT_BOTTOM,
+    [7] = screeps.FIND.EXIT_LEFT,
 }
 
 ---@type table<string, integer>
@@ -62,7 +56,7 @@ local function getUsedEnergy(store)
     if not store then
         return 0
     end
-    return store:getUsedCapacity(RESOURCE.ENERGY) or 0
+    return store:getUsedCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 ---@param store? Store
@@ -71,7 +65,7 @@ local function getFreeEnergy(store)
     if not store then
         return 0
     end
-    return store:getFreeCapacity(RESOURCE.ENERGY) or 0
+    return store:getFreeCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 ---@param body BodyPartType[]
@@ -79,7 +73,7 @@ end
 local function bodyCost(body)
     local total = 0
     for _, part in ipairs(body) do
-        total = total + (COST[part] or 0)
+        total = total + (screeps.COST[part] or 0)
     end
     return total
 end
@@ -91,17 +85,17 @@ local function buildWorkerBody(budget)
         return nil
     end
     ---@type BodyPartType[]
-    local body = { PART.WORK, PART.CARRY, PART.MOVE }
+    local body = { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE }
     local cost = 200
     while cost + 200 <= budget and #body + 3 <= 18 do
-        table.insert(body, PART.WORK)
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.WORK)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
         cost = cost + 200
     end
     if cost + 100 <= budget and #body + 2 <= 18 then
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
     end
     return body
 end
@@ -117,17 +111,17 @@ local function buildMinerBody(budget)
     local body = {}
     local cost = 0
     for _ = 1, workParts do
-        table.insert(body, PART.WORK)
+        table.insert(body, screeps.PART.WORK)
         cost = cost + 100
     end
     if cost + 50 <= budget then
-        table.insert(body, PART.CARRY)
+        table.insert(body, screeps.PART.CARRY)
         cost = cost + 50
     end
     local moveParts = (cost + 100 <= budget) and 2 or 1
     for _ = 1, moveParts do
         if cost + 50 <= budget then
-            table.insert(body, PART.MOVE)
+            table.insert(body, screeps.PART.MOVE)
             cost = cost + 50
         end
     end
@@ -141,17 +135,17 @@ local function buildHaulerBody(budget)
         return nil
     end
     ---@type BodyPartType[]
-    local body = { PART.CARRY, PART.CARRY, PART.MOVE }
+    local body = { screeps.PART.CARRY, screeps.PART.CARRY, screeps.PART.MOVE }
     local cost = 150
     while cost + 150 <= budget and #body + 3 <= 18 do
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
         cost = cost + 150
     end
     if cost + 100 <= budget and #body + 2 <= 18 then
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
     end
     return body
 end
@@ -162,7 +156,7 @@ local function buildScoutBody(budget)
     if budget < 50 then
         return nil
     end
-    return { PART.MOVE }
+    return { screeps.PART.MOVE }
 end
 
 ---@param budget integer
@@ -172,9 +166,9 @@ local function buildRemoteHarvesterBody(budget)
         return nil
     end
     if budget >= 550 then
-        return { PART.WORK, PART.WORK, PART.WORK, PART.CARRY, PART.MOVE, PART.MOVE, PART.MOVE, PART.MOVE }
+        return { screeps.PART.WORK, screeps.PART.WORK, screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE, screeps.PART.MOVE, screeps.PART.MOVE, screeps.PART.MOVE }
     end
-    return { PART.WORK, PART.WORK, PART.CARRY, PART.MOVE, PART.MOVE, PART.MOVE }
+    return { screeps.PART.WORK, screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE, screeps.PART.MOVE, screeps.PART.MOVE }
 end
 
 ---@param budget integer
@@ -187,10 +181,10 @@ local function buildRemoteHaulerBody(budget)
     ---@type BodyPartType[]
     local body = {}
     for _ = 1, pairsCount do
-        table.insert(body, PART.CARRY)
+        table.insert(body, screeps.PART.CARRY)
     end
     for _ = 1, pairsCount do
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.MOVE)
     end
     return body
 end
@@ -307,7 +301,7 @@ function Colony:countRoles()
         return counts
     end
 
-    local myCreeps = self.room:find(FIND.MY_CREEPS) or {} ---@type Creep[]
+    local myCreeps = self.room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, creep in ipairs(myCreeps) do
         counts.total = counts.total + 1
         local role = (creep.memory and creep.memory.role) or "harvester"
@@ -387,12 +381,12 @@ end
 ---@param sources Source[]
 ---@return integer
 function Colony:countSourceContainers(sources)
-    local structs = self.room:find(FIND.STRUCTURES) or {} ---@type Structure[]
+    local structs = self.room:find(screeps.FIND.STRUCTURES) or {} ---@type Structure[]
     local ready = 0
     for _, src in ipairs(sources) do
         if src.pos then
             for _, s in ipairs(structs) do
-                if s.structureType == STRUCTURE.CONTAINER and s.pos and src.pos:getRangeTo(s) <= 1 then
+                if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos and src.pos:getRangeTo(s) <= 1 then
                     ready = ready + 1
                     break
                 end
@@ -409,10 +403,10 @@ end
 function Colony:computeTargetRoster(energyCap)
     local room = self.room
     local rcl = self.rcl
-    local sources = room:find(FIND.SOURCES) or {} ---@type Source[]
-    local sites = room:find(FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
-    local structures = room:find(FIND.STRUCTURES) or {} ---@type Structure[]
-    local dropped = room:find(FIND.DROPPED_RESOURCES) or {} ---@type Resource[]
+    local sources = room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
+    local sites = room:find(screeps.FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+    local structures = room:find(screeps.FIND.STRUCTURES) or {} ---@type Structure[]
+    local dropped = room:find(screeps.FIND.DROPPED_RESOURCES) or {} ---@type Resource[]
 
     local sourceCount = math.max(1, #sources)
     local srcContainers = self:countSourceContainers(sources)
@@ -616,13 +610,13 @@ function Colony:manageSpawning()
 
     local name = roleToSpawn .. "_" .. tostring(screeps.Game.time or 0)
     local res = spawn:spawnCreep(body, name, { memory = creepMem })
-    rmem.nextSpawn = (res == OK) and ("spawning " .. roleToSpawn) or ("waiting to spawn " .. roleToSpawn)
+    rmem.nextSpawn = (res == screeps.OK) and ("spawning " .. roleToSpawn) or ("waiting to spawn " .. roleToSpawn)
 end
 
 ---Execute automated link energy transfers (source links -> controller link / hub link).
 function Colony:runLinks()
     local room = self.room
-    local myStructs = room:find(FIND.MY_STRUCTURES) ---@type Structure[]
+    local myStructs = room:find(screeps.FIND.MY_STRUCTURES) ---@type Structure[]
     if not myStructs or #myStructs == 0 then
         return
     end
@@ -632,9 +626,9 @@ function Colony:runLinks()
     ---@type StructureStorage|nil
     local storage = nil
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCTURE.LINK then
+        if s.structureType == screeps.STRUCTURE.LINK then
             table.insert(links, s --[[@as StructureLink]])
-        elseif s.structureType == STRUCTURE.STORAGE then
+        elseif s.structureType == screeps.STRUCTURE.STORAGE then
             storage = s --[[@as StructureStorage]]
         end
     end
@@ -643,7 +637,7 @@ function Colony:runLinks()
     end
 
     local ctrl = room.controller
-    local sources = room:find(FIND.SOURCES) or {} ---@type Source[]
+    local sources = room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
     ---@type StructureLink|nil
     local ctrlLink = nil
     ---@type StructureLink|nil
@@ -683,7 +677,7 @@ function Colony:runLinks()
         if getUsedEnergy(sender.store) < 400 or getFreeEnergy(receiver.store) < 200 then
             return false
         end
-        if sender:transferEnergy(receiver) == OK then
+        if sender:transferEnergy(receiver) == screeps.OK then
             if room.visual and sender.pos and receiver.pos then
                 room.visual:line(sender.pos.x, sender.pos.y, receiver.pos.x, receiver.pos.y, {
                     color = "#b388ff",

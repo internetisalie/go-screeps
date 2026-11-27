@@ -3,8 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
 
 local Colony <const> = require("colony")
 local roles <const> = require("roles")
@@ -42,17 +40,17 @@ local function adoptUnassignedCreeps(game)
             if creep.body then
                 for _, part in ipairs(creep.body) do
                     local ptype = (type(part) == "table" and part.type) or part
-                    if ptype == PART.ATTACK then
+                    if ptype == screeps.PART.ATTACK then
                         attack = attack + 1
-                    elseif ptype == PART.RANGED_ATTACK then
+                    elseif ptype == screeps.PART.RANGED_ATTACK then
                         ranged = ranged + 1
-                    elseif ptype == PART.HEAL then
+                    elseif ptype == screeps.PART.HEAL then
                         heal = heal + 1
-                    elseif ptype == PART.WORK then
+                    elseif ptype == screeps.PART.WORK then
                         work = work + 1
-                    elseif ptype == PART.CARRY then
+                    elseif ptype == screeps.PART.CARRY then
                         carry = carry + 1
-                    elseif ptype == PART.MOVE then
+                    elseif ptype == screeps.PART.MOVE then
                         move = move + 1
                     end
                 end
@@ -93,7 +91,7 @@ local function loop(game, memory)
         for _, room in pairs(game.rooms) do
             roles.recordRoomIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
-                or (#(room:find(FIND.MY_SPAWNS) or {}) > 0)
+                or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
                 Colony.new(room):run()
             end

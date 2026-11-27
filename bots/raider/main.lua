@@ -3,8 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
 
 local RaiderColony <const> = require("colony")
 local economy <const> = require("economy")
@@ -43,15 +41,15 @@ local function adoptUnassignedCreeps(game)
             if creep.body then
                 for _, part in ipairs(creep.body) do
                     local pt = (type(part) == "table" and part.type) or part
-                    if pt == PART.ATTACK then
+                    if pt == screeps.PART.ATTACK then
                         attack = attack + 1
-                    elseif pt == PART.RANGED_ATTACK then
+                    elseif pt == screeps.PART.RANGED_ATTACK then
                         ranged = ranged + 1
-                    elseif pt == PART.HEAL then
+                    elseif pt == screeps.PART.HEAL then
                         heal = heal + 1
-                    elseif pt == PART.WORK then
+                    elseif pt == screeps.PART.WORK then
                         work = work + 1
-                    elseif pt == PART.CARRY then
+                    elseif pt == screeps.PART.CARRY then
                         carry = carry + 1
                     end
                 end
@@ -91,7 +89,7 @@ local function loop(game, memory)
         for _, room in pairs(game.rooms) do
             combat.updateIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
-                or (#(room:find(FIND.MY_SPAWNS) or {}) > 0)
+                or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
                 RaiderColony.new(room, globalCounts):run()
             end

@@ -3,10 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local OK <const> = screeps.OK
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
-local COST <const> = screeps.COST
 
 local economy <const> = require("economy")
 local planner <const> = require("planner")
@@ -58,7 +54,7 @@ end
 local function bodyCost(body)
     local total = 0
     for _, part in ipairs(body) do
-        total = total + (COST[part] or 0)
+        total = total + (screeps.COST[part] or 0)
     end
     return total
 end
@@ -124,7 +120,7 @@ end
 ---@return RaiderRoleCounts
 function RaiderColony:countRoomRoles()
     local counts = makeRoleCounter()
-    local myCreeps = self.room:find(FIND.MY_CREEPS) or {} ---@type Creep[]
+    local myCreeps = self.room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, creep in ipairs(myCreeps) do
         counts.total = counts.total + 1
         local role = (creep.memory and creep.memory.role) or "harvester"
@@ -166,8 +162,8 @@ function RaiderColony:manageSpawning()
     local energyAvail = room.energyAvailable or 0
     local energyCap = math.max(energyAvail, room.energyCapacityAvailable or energyAvail)
 
-    local sources = room:find(FIND.SOURCES) or {} ---@type Source[]
-    local sites = room:find(FIND.MY_CONSTRUCTION_SITES) or room:find(FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+    local sources = room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
+    local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or room:find(screeps.FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
     local sourceCount = math.max(1, #sources)
 
     local wantHarvesters = math.max(2, math.min(3, sourceCount))
@@ -266,7 +262,7 @@ function RaiderColony:manageSpawning()
     elseif roleToSpawn == "defender" then
         body = combat.buildDefenderBody(budget)
     elseif roleToSpawn == "scout" then
-        body = { PART.MOVE }
+        body = { screeps.PART.MOVE }
     elseif roleToSpawn == "brawler" then
         body = combat.buildBrawlerBody(budget)
     elseif roleToSpawn == "skirmisher" then
@@ -297,7 +293,7 @@ function RaiderColony:manageSpawning()
             rallyWait = 0,
         },
     })
-    rmem.nextSpawn = (res == OK) and ("spawning " .. roleToSpawn) or ("waiting to spawn " .. roleToSpawn)
+    rmem.nextSpawn = (res == screeps.OK) and ("spawning " .. roleToSpawn) or ("waiting to spawn " .. roleToSpawn)
 end
 
 ---Draw crimson/amber tactical RoomVisual HUD for this Raider home room.

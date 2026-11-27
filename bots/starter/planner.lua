@@ -2,10 +2,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local OK <const> = screeps.OK
-local FIND <const> = screeps.FIND
-local STRUCTURE <const> = screeps.STRUCTURE
-local PathFinder <const> = screeps.PathFinder
 
 ---@class PlanCoord
 ---@field x integer
@@ -97,7 +93,7 @@ end
 ---@param room Room
 ---@return StructureSpawn|nil
 function M.getPrimarySpawn(room)
-    local spawns = room:find(FIND.MY_SPAWNS)
+    local spawns = room:find(screeps.FIND.MY_SPAWNS)
     if not spawns or #spawns == 0 then
         return nil
     end
@@ -127,32 +123,32 @@ local function scanRoomState(room)
         local key = tileKey(pos.x, pos.y)
         counts[stype] = (counts[stype] or 0) + 1
 
-        if stype == STRUCTURE.ROAD then
+        if stype == screeps.STRUCTURE.ROAD then
             hasRoad[key] = true
-        elseif stype == STRUCTURE.RAMPART then
+        elseif stype == screeps.STRUCTURE.RAMPART then
             hasRampart[key] = true
         else
             solid[key] = stype
         end
 
-        if stype == STRUCTURE.CONTAINER then
+        if stype == screeps.STRUCTURE.CONTAINER then
             table.insert(containers, pos)
-        elseif stype == STRUCTURE.LINK then
+        elseif stype == screeps.STRUCTURE.LINK then
             table.insert(links, pos)
-        elseif stype == STRUCTURE.STORAGE then
+        elseif stype == screeps.STRUCTURE.STORAGE then
             storagePos = pos
             table.insert(keyStructures, pos)
-        elseif stype == STRUCTURE.SPAWN or stype == STRUCTURE.TOWER then
+        elseif stype == screeps.STRUCTURE.SPAWN or stype == screeps.STRUCTURE.TOWER then
             table.insert(keyStructures, pos)
         end
     end
 
-    local structs = room:find(FIND.STRUCTURES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {}
     for _, s in ipairs(structs) do
         record(s.pos, s.structureType)
     end
 
-    local sites = room:find(FIND.CONSTRUCTION_SITES) or {}
+    local sites = room:find(screeps.FIND.CONSTRUCTION_SITES) or {}
     for _, s in ipairs(sites) do
         record(s.pos, s.structureType)
     end
@@ -231,7 +227,7 @@ local function placeCheckerboardNear(room, terrain, state, origin, structureType
                         if inBuildBounds(x, y) then
                             local key = tileKey(x, y)
                             if not state.solid[key] and terrain:get(x, y) ~= 1 then
-                                if room:createConstructionSite(x, y, structureType) == OK then
+                                if room:createConstructionSite(x, y, structureType) == screeps.OK then
                                     state.solid[key] = structureType
                                     state.counts[structureType] = (state.counts[structureType] or 0) + 1
                                     placed = placed + 1
@@ -252,8 +248,8 @@ end
 
 -- Shortest road path from startPos to adjacent of endPos (uses native PathFinder.search when available).
 local function findRoadPath(terrain, startPos, endPos)
-    if PathFinder and PathFinder.search and startPos and endPos then
-        local res = PathFinder.search(startPos, { pos = endPos, range = 1 }, {
+    if screeps.PathFinder and screeps.PathFinder.search and startPos and endPos then
+        local res = screeps.PathFinder.search(startPos, { pos = endPos, range = 1 }, {
             plainCost = 2,
             swampCost = 4,
             maxOps = 2000,
@@ -336,9 +332,9 @@ local function planContainers(room, terrain, state, spawn, sources)
         if src.pos and not hasPosNear(state.containers, src.pos, 1) then
             local cx, cy = findBestTileNear(terrain, state, src.pos, spawn.pos, 1, 1)
             if cx and cy then
-                if room:createConstructionSite(cx, cy, STRUCTURE.CONTAINER) == OK then
+                if room:createConstructionSite(cx, cy, screeps.STRUCTURE.CONTAINER) == screeps.OK then
                     local key = tileKey(cx, cy)
-                    state.solid[key] = STRUCTURE.CONTAINER
+                    state.solid[key] = screeps.STRUCTURE.CONTAINER
                     table.insert(state.containers, { x = cx, y = cy })
                 end
             end
@@ -349,9 +345,9 @@ local function planContainers(room, terrain, state, spawn, sources)
         if not hasPosNear(state.containers, room.controller.pos, 2) then
             local cx, cy = findBestTileNear(terrain, state, room.controller.pos, spawn.pos, 1, 2)
             if cx and cy then
-                if room:createConstructionSite(cx, cy, STRUCTURE.CONTAINER) == OK then
+                if room:createConstructionSite(cx, cy, screeps.STRUCTURE.CONTAINER) == screeps.OK then
                     local key = tileKey(cx, cy)
-                    state.solid[key] = STRUCTURE.CONTAINER
+                    state.solid[key] = screeps.STRUCTURE.CONTAINER
                     table.insert(state.containers, { x = cx, y = cy })
                 end
             end
@@ -361,16 +357,16 @@ end
 
 -- Plan Storage at RCL >= 4 near Spawn1.
 local function planStorage(room, terrain, state, spawn)
-    if (state.counts[STRUCTURE.STORAGE] or 0) >= 1 then
+    if (state.counts[screeps.STRUCTURE.STORAGE] or 0) >= 1 then
         return
     end
     local towards = (room.controller and room.controller.pos) or nil
     local sx, sy = findBestTileNear(terrain, state, spawn.pos, towards, 2, 4)
     if sx and sy then
-        if room:createConstructionSite(sx, sy, STRUCTURE.STORAGE) == OK then
+        if room:createConstructionSite(sx, sy, screeps.STRUCTURE.STORAGE) == screeps.OK then
             local key = tileKey(sx, sy)
-            state.solid[key] = STRUCTURE.STORAGE
-            state.counts[STRUCTURE.STORAGE] = 1
+            state.solid[key] = screeps.STRUCTURE.STORAGE
+            state.counts[screeps.STRUCTURE.STORAGE] = 1
             state.storagePos = { x = sx, y = sy }
             table.insert(state.keyStructures, state.storagePos)
         end
@@ -380,7 +376,7 @@ end
 -- Plan Links at RCL >= 5 (hub link near storage/spawn, controller link, source links).
 local function planLinks(room, terrain, state, spawn, sources, rcl)
     local limit = M.LINK_LIMITS[rcl] or 0
-    local current = state.counts[STRUCTURE.LINK] or 0
+    local current = state.counts[screeps.STRUCTURE.LINK] or 0
     if current >= limit then
         return
     end
@@ -394,11 +390,11 @@ local function planLinks(room, terrain, state, spawn, sources, rcl)
         end
         local lx, ly = findBestTileNear(terrain, state, anchorPos, towardsPos, 1, maxRange)
         if lx and ly then
-            if room:createConstructionSite(lx, ly, STRUCTURE.LINK) == OK then
+            if room:createConstructionSite(lx, ly, screeps.STRUCTURE.LINK) == screeps.OK then
                 local key = tileKey(lx, ly)
-                state.solid[key] = STRUCTURE.LINK
+                state.solid[key] = screeps.STRUCTURE.LINK
                 current = current + 1
-                state.counts[STRUCTURE.LINK] = current
+                state.counts[screeps.STRUCTURE.LINK] = current
                 table.insert(state.links, { x = lx, y = ly })
             end
         end
@@ -430,7 +426,7 @@ local function planRamparts(room, state)
         end
         local key = tileKey(pos.x, pos.y)
         if not state.hasRampart[key] then
-            if room:createConstructionSite(pos.x, pos.y, STRUCTURE.RAMPART) == OK then
+            if room:createConstructionSite(pos.x, pos.y, screeps.STRUCTURE.RAMPART) == screeps.OK then
                 state.hasRampart[key] = true
                 placed = placed + 1
             end
@@ -465,7 +461,7 @@ local function planRoads(room, terrain, state, spawn, sources)
             end
             local key = tileKey(step.x, step.y)
             if not state.hasRoad[key] and not state.solid[key] and terrain:get(step.x, step.y) ~= 1 then
-                if room:createConstructionSite(step.x, step.y, STRUCTURE.ROAD) == OK then
+                if room:createConstructionSite(step.x, step.y, screeps.STRUCTURE.ROAD) == screeps.OK then
                     state.hasRoad[key] = true
                     roadsPlaced = roadsPlaced + 1
                 end
@@ -486,7 +482,7 @@ local function ensurePlan(room, spawn, terrain)
     end
 
     local sx, sy = spawn.pos.x, spawn.pos.y
-    local sources = room:find(FIND.SOURCES) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {}
     local ctrlPos = room.controller and room.controller.pos or nil
 
     local plan = {
@@ -504,7 +500,7 @@ local function ensurePlan(room, spawn, terrain)
     }
 
     local reserved = {}
-    reserved[tileKey(sx, sy)] = STRUCTURE.SPAWN
+    reserved[tileKey(sx, sy)] = screeps.STRUCTURE.SPAWN
     local vState = { solid = reserved }
 
     -- 1. Source containers + controller container.
@@ -512,7 +508,7 @@ local function ensurePlan(room, spawn, terrain)
         if src.pos then
             local cx, cy = findBestTileNear(terrain, vState, src.pos, spawn.pos, 1, 1)
             if cx and cy then
-                reserved[tileKey(cx, cy)] = STRUCTURE.CONTAINER
+                reserved[tileKey(cx, cy)] = screeps.STRUCTURE.CONTAINER
                 table.insert(plan.containers, { x = cx, y = cy })
             end
         end
@@ -520,7 +516,7 @@ local function ensurePlan(room, spawn, terrain)
     if ctrlPos then
         local cx, cy = findBestTileNear(terrain, vState, ctrlPos, spawn.pos, 1, 2)
         if cx and cy then
-            reserved[tileKey(cx, cy)] = STRUCTURE.CONTAINER
+            reserved[tileKey(cx, cy)] = screeps.STRUCTURE.CONTAINER
             table.insert(plan.containers, { x = cx, y = cy })
         end
     end
@@ -528,7 +524,7 @@ local function ensurePlan(room, spawn, terrain)
     -- 2. Storage near spawn towards controller.
     local stx, sty = findBestTileNear(terrain, vState, spawn.pos, ctrlPos, 2, 4)
     if stx and sty then
-        reserved[tileKey(stx, sty)] = STRUCTURE.STORAGE
+        reserved[tileKey(stx, sty)] = screeps.STRUCTURE.STORAGE
         plan.storage = { x = stx, y = sty }
     end
 
@@ -588,7 +584,7 @@ local function ensurePlan(room, spawn, terrain)
         end
         local lx, ly = findBestTileNear(terrain, vState, anchorPos, towardsPos, 1, maxRange)
         if lx and ly then
-            reserved[tileKey(lx, ly)] = STRUCTURE.LINK
+            reserved[tileKey(lx, ly)] = screeps.STRUCTURE.LINK
             table.insert(plan.links, { x = lx, y = ly })
         end
     end
@@ -674,15 +670,15 @@ function M.planRoom(room, rcl)
     end
 
     local state = scanRoomState(room)
-    local sources = room:find(FIND.SOURCES) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {}
 
     -- 1. Source and controller containers (RCL >= 2).
     if plan and plan.containers and #plan.containers > 0 then
         for _, pt in ipairs(plan.containers) do
             local key = tileKey(pt.x, pt.y)
             if not state.solid[key] then
-                if room:createConstructionSite(pt.x, pt.y, STRUCTURE.CONTAINER) == OK then
-                    state.solid[key] = STRUCTURE.CONTAINER
+                if room:createConstructionSite(pt.x, pt.y, screeps.STRUCTURE.CONTAINER) == screeps.OK then
+                    state.solid[key] = screeps.STRUCTURE.CONTAINER
                     table.insert(state.containers, { x = pt.x, y = pt.y })
                 end
             end
@@ -693,7 +689,7 @@ function M.planRoom(room, rcl)
 
     -- 2. Checkerboard extensions scaling RCL 2-8.
     local maxExt = M.EXTENSION_LIMITS[rcl] or 0
-    local curExt = state.counts[STRUCTURE.EXTENSION] or 0
+    local curExt = state.counts[screeps.STRUCTURE.EXTENSION] or 0
     if curExt < maxExt then
         local toPlace = math.min(MAX_EXT_SITES_PER_RUN, maxExt - curExt)
         local placed = 0
@@ -704,22 +700,22 @@ function M.planRoom(room, rcl)
                 end
                 local key = tileKey(pt.x, pt.y)
                 if not state.solid[key] and terrain:get(pt.x, pt.y) ~= 1 then
-                    if room:createConstructionSite(pt.x, pt.y, STRUCTURE.EXTENSION) == OK then
-                        state.solid[key] = STRUCTURE.EXTENSION
-                        state.counts[STRUCTURE.EXTENSION] = (state.counts[STRUCTURE.EXTENSION] or 0) + 1
+                    if room:createConstructionSite(pt.x, pt.y, screeps.STRUCTURE.EXTENSION) == screeps.OK then
+                        state.solid[key] = screeps.STRUCTURE.EXTENSION
+                        state.counts[screeps.STRUCTURE.EXTENSION] = (state.counts[screeps.STRUCTURE.EXTENSION] or 0) + 1
                         placed = placed + 1
                     end
                 end
             end
         end
         if placed < toPlace then
-            placeCheckerboardNear(room, terrain, state, spawn.pos, STRUCTURE.EXTENSION, toPlace - placed, 2, 12, true)
+            placeCheckerboardNear(room, terrain, state, spawn.pos, screeps.STRUCTURE.EXTENSION, toPlace - placed, 2, 12, true)
         end
     end
 
     -- 3. Towers scaling RCL 3-8.
     local maxTowers = M.TOWER_LIMITS[rcl] or 0
-    local curTowers = state.counts[STRUCTURE.TOWER] or 0
+    local curTowers = state.counts[screeps.STRUCTURE.TOWER] or 0
     if curTowers < maxTowers then
         local needed = maxTowers - curTowers
         local placed = 0
@@ -730,9 +726,9 @@ function M.planRoom(room, rcl)
                 end
                 local key = tileKey(pt.x, pt.y)
                 if not state.solid[key] and terrain:get(pt.x, pt.y) ~= 1 then
-                    if room:createConstructionSite(pt.x, pt.y, STRUCTURE.TOWER) == OK then
-                        state.solid[key] = STRUCTURE.TOWER
-                        state.counts[STRUCTURE.TOWER] = (state.counts[STRUCTURE.TOWER] or 0) + 1
+                    if room:createConstructionSite(pt.x, pt.y, screeps.STRUCTURE.TOWER) == screeps.OK then
+                        state.solid[key] = screeps.STRUCTURE.TOWER
+                        state.counts[screeps.STRUCTURE.TOWER] = (state.counts[screeps.STRUCTURE.TOWER] or 0) + 1
                         table.insert(state.keyStructures, { x = pt.x, y = pt.y })
                         placed = placed + 1
                     end
@@ -740,22 +736,22 @@ function M.planRoom(room, rcl)
             end
         end
         if placed < needed then
-            local extra = placeCheckerboardNear(room, terrain, state, spawn.pos, STRUCTURE.TOWER, needed - placed, 2, 6, true)
+            local extra = placeCheckerboardNear(room, terrain, state, spawn.pos, screeps.STRUCTURE.TOWER, needed - placed, 2, 6, true)
             placed = placed + extra
             if placed < needed then
-                placeCheckerboardNear(room, terrain, state, spawn.pos, STRUCTURE.TOWER, needed - placed, 2, 7, false)
+                placeCheckerboardNear(room, terrain, state, spawn.pos, screeps.STRUCTURE.TOWER, needed - placed, 2, 7, false)
             end
         end
     end
 
     -- 4. Storage at RCL >= 4.
     if rcl >= 4 then
-        if plan and plan.storage and (state.counts[STRUCTURE.STORAGE] or 0) < 1 then
+        if plan and plan.storage and (state.counts[screeps.STRUCTURE.STORAGE] or 0) < 1 then
             local key = tileKey(plan.storage.x, plan.storage.y)
             if not state.solid[key] then
-                if room:createConstructionSite(plan.storage.x, plan.storage.y, STRUCTURE.STORAGE) == OK then
-                    state.solid[key] = STRUCTURE.STORAGE
-                    state.counts[STRUCTURE.STORAGE] = 1
+                if room:createConstructionSite(plan.storage.x, plan.storage.y, screeps.STRUCTURE.STORAGE) == screeps.OK then
+                    state.solid[key] = screeps.STRUCTURE.STORAGE
+                    state.counts[screeps.STRUCTURE.STORAGE] = 1
                     state.storagePos = { x = plan.storage.x, y = plan.storage.y }
                     table.insert(state.keyStructures, state.storagePos)
                 end
@@ -768,7 +764,7 @@ function M.planRoom(room, rcl)
     -- 5. Links at RCL >= 5.
     if rcl >= 5 then
         local linkLimit = M.LINK_LIMITS[rcl] or 0
-        local curLinks = state.counts[STRUCTURE.LINK] or 0
+        local curLinks = state.counts[screeps.STRUCTURE.LINK] or 0
         if plan and plan.links and curLinks < linkLimit then
             for _, pt in ipairs(plan.links) do
                 if curLinks >= linkLimit then
@@ -776,10 +772,10 @@ function M.planRoom(room, rcl)
                 end
                 local key = tileKey(pt.x, pt.y)
                 if not state.solid[key] then
-                    if room:createConstructionSite(pt.x, pt.y, STRUCTURE.LINK) == OK then
-                        state.solid[key] = STRUCTURE.LINK
+                    if room:createConstructionSite(pt.x, pt.y, screeps.STRUCTURE.LINK) == screeps.OK then
+                        state.solid[key] = screeps.STRUCTURE.LINK
                         curLinks = curLinks + 1
-                        state.counts[STRUCTURE.LINK] = curLinks
+                        state.counts[screeps.STRUCTURE.LINK] = curLinks
                         table.insert(state.links, { x = pt.x, y = pt.y })
                     end
                 end
@@ -803,7 +799,7 @@ function M.planRoom(room, rcl)
             end
             local key = tileKey(step.x, step.y)
             if not state.hasRoad[key] and not state.solid[key] and terrain:get(step.x, step.y) ~= 1 then
-                if room:createConstructionSite(step.x, step.y, STRUCTURE.ROAD) == OK then
+                if room:createConstructionSite(step.x, step.y, screeps.STRUCTURE.ROAD) == screeps.OK then
                     state.hasRoad[key] = true
                     roadsPlaced = roadsPlaced + 1
                 end
@@ -837,20 +833,20 @@ function M.drawPlanVisuals(room)
             return
         end
         local key = tileKey(pos.x, pos.y)
-        if stype == STRUCTURE.ROAD then
+        if stype == screeps.STRUCTURE.ROAD then
             hasRoad[key] = true
-        elseif stype == STRUCTURE.RAMPART then
+        elseif stype == screeps.STRUCTURE.RAMPART then
             hasRampart[key] = true
         else
             solid[key] = true
         end
     end
 
-    local structs = room:find(FIND.STRUCTURES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {}
     for _, s in ipairs(structs) do
         markOccupied(s.pos, s.structureType)
     end
-    local sites = room:find(FIND.CONSTRUCTION_SITES) or {}
+    local sites = room:find(screeps.FIND.CONSTRUCTION_SITES) or {}
     for _, s in ipairs(sites) do
         markOccupied(s.pos, s.structureType)
     end

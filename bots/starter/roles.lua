@@ -3,11 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local ERR <const> = screeps.ERR
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
-local RESOURCE <const> = screeps.RESOURCE
-local STRUCTURE <const> = screeps.STRUCTURE
 
 ---@class RoomIntelEntry
 ---@field owner? string
@@ -20,10 +15,10 @@ local M = {}
 
 ---@type table<integer, FindConstant>
 local EXIT_DIRS <const> = {
-    [1] = FIND.EXIT_TOP,
-    [3] = FIND.EXIT_RIGHT,
-    [5] = FIND.EXIT_BOTTOM,
-    [7] = FIND.EXIT_LEFT,
+    [1] = screeps.FIND.EXIT_TOP,
+    [3] = screeps.FIND.EXIT_RIGHT,
+    [5] = screeps.FIND.EXIT_BOTTOM,
+    [7] = screeps.FIND.EXIT_LEFT,
 }
 
 local SCOUT_INTEL_TTL = 1500
@@ -132,8 +127,8 @@ function M.recordRoomIntel(room)
         return
     end
 
-    local sources = room:find(FIND.SOURCES) or {}
-    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {}
+    local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
     local owner = nil
     local ctrl = room.controller
     if ctrl then
@@ -158,14 +153,14 @@ local function getUsedEnergy(store)
     if not store then
         return 0
     end
-    return store:getUsedCapacity(RESOURCE.ENERGY) or 0
+    return store:getUsedCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 local function getFreeEnergy(store)
     if not store then
         return 0
     end
-    return store:getFreeCapacity(RESOURCE.ENERGY) or 0
+    return store:getFreeCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 local function drawTargetLine(creep, target, color)
@@ -201,7 +196,7 @@ local function updateWorkingState(creep)
 end
 
 local function findNearestSource(creep)
-    local sources = creep.room:find(FIND.SOURCES)
+    local sources = creep.room:find(screeps.FIND.SOURCES)
     if not sources or #sources == 0 then
         return nil
     end
@@ -220,7 +215,7 @@ local function findNearestSource(creep)
 end
 
 local function findDroppedEnergy(creep)
-    local dropped = creep.room:find(FIND.DROPPED_RESOURCES)
+    local dropped = creep.room:find(screeps.FIND.DROPPED_RESOURCES)
     if not dropped or #dropped == 0 then
         return nil
     end
@@ -228,7 +223,7 @@ local function findDroppedEnergy(creep)
     local pile = {}
     local small = {}
     for _, res in ipairs(dropped) do
-        if res.resourceType == nil or res.resourceType == RESOURCE.ENERGY then
+        if res.resourceType == nil or res.resourceType == screeps.RESOURCE.ENERGY then
             if res.amount == nil or res.amount >= 25 then
                 table.insert(pile, res)
             else
@@ -244,10 +239,10 @@ local function findDroppedEnergy(creep)
 end
 
 local function findEnergyTombstone(creep)
-    if not FIND.TOMBSTONES then
+    if not screeps.FIND.TOMBSTONES then
         return nil
     end
-    local tombs = creep.room:find(FIND.TOMBSTONES)
+    local tombs = creep.room:find(screeps.FIND.TOMBSTONES)
     if not tombs or #tombs == 0 then
         return nil
     end
@@ -261,12 +256,12 @@ local function findEnergyTombstone(creep)
 end
 
 local function findRoomStorage(room)
-    local myStructs = room:find(FIND.MY_STRUCTURES)
+    local myStructs = room:find(screeps.FIND.MY_STRUCTURES)
     if not myStructs then
         return nil
     end
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCTURE.STORAGE then
+        if s.structureType == screeps.STRUCTURE.STORAGE then
             return s
         end
     end
@@ -277,10 +272,10 @@ local function findContainersNear(room, anchorPos, maxRange, minEnergy)
     if not anchorPos then
         return {}
     end
-    local structs = room:find(FIND.STRUCTURES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {}
     local matches = {}
     for _, s in ipairs(structs) do
-        if s.structureType == STRUCTURE.CONTAINER and s.pos then
+        if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos then
             if anchorPos:getRangeTo(s) <= maxRange then
                 if minEnergy == nil or getUsedEnergy(s.store) >= minEnergy then
                     table.insert(matches, s)
@@ -292,12 +287,12 @@ local function findContainersNear(room, anchorPos, maxRange, minEnergy)
 end
 
 local function findSourceContainers(room, minEnergy)
-    local sources = room:find(FIND.SOURCES) or {}
-    local structs = room:find(FIND.STRUCTURES) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {}
     local matches = {}
 
     for _, s in ipairs(structs) do
-        if s.structureType == STRUCTURE.CONTAINER and s.pos then
+        if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos then
             if minEnergy == nil or getUsedEnergy(s.store) >= minEnergy then
                 for _, src in ipairs(sources) do
                     if src.pos and src.pos:getRangeTo(s) <= 2 then
@@ -312,7 +307,7 @@ local function findSourceContainers(room, minEnergy)
 end
 
 local function findAnyEnergyContainer(creep)
-    local structures = creep.room:find(FIND.STRUCTURES)
+    local structures = creep.room:find(screeps.FIND.STRUCTURES)
     if not structures or #structures == 0 then
         return nil
     end
@@ -320,7 +315,7 @@ local function findAnyEnergyContainer(creep)
     local rich = {}
     local any = {}
     for _, s in ipairs(structures) do
-        if s.structureType == STRUCTURE.CONTAINER then
+        if s.structureType == screeps.STRUCTURE.CONTAINER then
             local energy = getUsedEnergy(s.store)
             if energy >= 50 then
                 table.insert(rich, s)
@@ -339,22 +334,22 @@ end
 -- Find highest-priority structure needing energy (spawns/extensions -> towers -> optional storage/containers).
 local function findEnergyDeliveryTarget(creep, opts)
     opts = opts or {}
-    local myStructures = creep.room:find(FIND.MY_STRUCTURES)
+    local myStructures = creep.room:find(screeps.FIND.MY_STRUCTURES)
     local spawnOrExt = {}
     local towers = {}
     local storage = nil
 
     if myStructures then
         for _, s in ipairs(myStructures) do
-            if s.structureType == STRUCTURE.SPAWN or s.structureType == STRUCTURE.EXTENSION then
+            if s.structureType == screeps.STRUCTURE.SPAWN or s.structureType == screeps.STRUCTURE.EXTENSION then
                 if getFreeEnergy(s.store) > 0 then
                     table.insert(spawnOrExt, s)
                 end
-            elseif s.structureType == STRUCTURE.TOWER then
+            elseif s.structureType == screeps.STRUCTURE.TOWER then
                 if getFreeEnergy(s.store) > 50 then
                     table.insert(towers, s)
                 end
-            elseif s.structureType == STRUCTURE.STORAGE then
+            elseif s.structureType == screeps.STRUCTURE.STORAGE then
                 storage = s
             end
         end
@@ -385,10 +380,10 @@ local function findEnergyDeliveryTarget(creep, opts)
     end
 
     if opts.includeContainers then
-        local structures = creep.room:find(FIND.STRUCTURES) or {}
+        local structures = creep.room:find(screeps.FIND.STRUCTURES) or {}
         local containers = {}
         for _, s in ipairs(structures) do
-            if s.structureType == STRUCTURE.CONTAINER and getFreeEnergy(s.store) > 0 then
+            if s.structureType == screeps.STRUCTURE.CONTAINER and getFreeEnergy(s.store) > 0 then
                 table.insert(containers, s)
             end
         end
@@ -401,13 +396,13 @@ local function findEnergyDeliveryTarget(creep, opts)
 end
 
 local function roomNeedsCriticalEnergy(room)
-    local myStructures = room:find(FIND.MY_STRUCTURES) or {}
+    local myStructures = room:find(screeps.FIND.MY_STRUCTURES) or {}
     for _, s in ipairs(myStructures) do
-        if s.structureType == STRUCTURE.SPAWN or s.structureType == STRUCTURE.EXTENSION then
+        if s.structureType == screeps.STRUCTURE.SPAWN or s.structureType == screeps.STRUCTURE.EXTENSION then
             if getFreeEnergy(s.store) > 0 then
                 return true
             end
-        elseif s.structureType == STRUCTURE.TOWER then
+        elseif s.structureType == screeps.STRUCTURE.TOWER then
             if getFreeEnergy(s.store) > 100 then
                 return true
             end
@@ -422,7 +417,7 @@ local function upgradeRoomController(creep)
         return false
     end
     drawTargetLine(creep, ctrl, "#7e57c2")
-    if creep:upgradeController(ctrl) == ERR.NOT_IN_RANGE then
+    if creep:upgradeController(ctrl) == screeps.ERR.NOT_IN_RANGE then
         creep:moveTo(ctrl)
     end
     return true
@@ -434,12 +429,12 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
 
     -- Upgraders prefer controller link or controller container first.
     if preferControllerSupply and ctrl and ctrl.pos then
-        local myStructs = creep.room:find(FIND.MY_STRUCTURES) or {}
+        local myStructs = creep.room:find(screeps.FIND.MY_STRUCTURES) or {}
         for _, s in ipairs(myStructs) do
-            if s.structureType == STRUCTURE.LINK and s.pos and ctrl.pos:getRangeTo(s) <= 3 then
+            if s.structureType == screeps.STRUCTURE.LINK and s.pos and ctrl.pos:getRangeTo(s) <= 3 then
                 if getUsedEnergy(s.store) > 0 then
                     drawTargetLine(creep, s, "#b388ff")
-                    if creep:withdraw(s, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+                    if creep:withdraw(s, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                         creep:moveTo(s)
                     end
                     return true
@@ -451,7 +446,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
         local c = findClosest(creep.pos, ctrlContainers)
         if c then
             drawTargetLine(creep, c, "#ffca28")
-            if creep:withdraw(c, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(c, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(c)
             end
             return true
@@ -461,7 +456,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
     local storage = findRoomStorage(creep.room)
     if storage and getUsedEnergy(storage.store) >= 100 then
         drawTargetLine(creep, storage, "#ffd54f")
-        if creep:withdraw(storage, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:withdraw(storage, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(storage)
         end
         return true
@@ -470,7 +465,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
     local dropped = findDroppedEnergy(creep)
     if dropped then
         drawTargetLine(creep, dropped, "#ffd54f")
-        if creep:pickup(dropped) == ERR.NOT_IN_RANGE then
+        if creep:pickup(dropped) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(dropped)
         end
         return true
@@ -479,7 +474,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
     local container = findAnyEnergyContainer(creep)
     if container then
         drawTargetLine(creep, container, "#ffca28")
-        if creep:withdraw(container, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:withdraw(container, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(container)
         end
         return true
@@ -488,7 +483,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
     local source = findNearestSource(creep)
     if source then
         drawTargetLine(creep, source, "#ffe082")
-        if creep:harvest(source) == ERR.NOT_IN_RANGE then
+        if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(source)
         end
         return true
@@ -505,7 +500,7 @@ function M.harvester(creep)
         local source = findNearestSource(creep)
         if source then
             drawTargetLine(creep, source, "#ffe082")
-            if creep:harvest(source) == ERR.NOT_IN_RANGE then
+            if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(source)
             end
         end
@@ -518,7 +513,7 @@ function M.harvester(creep)
     })
     if target then
         drawTargetLine(creep, target, "#ffeb3b")
-        if creep:transfer(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return
@@ -537,7 +532,7 @@ local function resolveMinerSource(creep)
         creep.memory.sourceId = nil
     end
 
-    local sources = creep.room:find(FIND.SOURCES) or {}
+    local sources = creep.room:find(screeps.FIND.SOURCES) or {}
     if #sources == 0 then
         return nil
     end
@@ -547,7 +542,7 @@ local function resolveMinerSource(creep)
         assignedCounts[src.id] = 0
     end
 
-    local myCreeps = creep.room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = creep.room:find(screeps.FIND.MY_CREEPS) or {}
     for _, c in ipairs(myCreeps) do
         if c.id ~= creep.id and c.memory and c.memory.role == "miner" and c.memory.sourceId then
             if assignedCounts[c.memory.sourceId] ~= nil then
@@ -590,12 +585,12 @@ function M.miner(creep)
 
     -- If carrying energy and an adjacent source link has free capacity, dump into the link.
     if getUsedEnergy(creep.store) > 0 then
-        local myStructs = creep.room:find(FIND.MY_STRUCTURES) or {}
+        local myStructs = creep.room:find(screeps.FIND.MY_STRUCTURES) or {}
         for _, s in ipairs(myStructs) do
-            if s.structureType == STRUCTURE.LINK and s.pos and creep.pos:getRangeTo(s) <= 1 then
+            if s.structureType == screeps.STRUCTURE.LINK and s.pos and creep.pos:getRangeTo(s) <= 1 then
                 if getFreeEnergy(s.store) > 0 then
                     drawTargetLine(creep, s, "#b388ff")
-                    creep:transfer(s, RESOURCE.ENERGY)
+                    creep:transfer(s, screeps.RESOURCE.ENERGY)
                     break
                 end
             end
@@ -603,7 +598,7 @@ function M.miner(creep)
     end
 
     drawTargetLine(creep, source, "#ffd54f")
-    if creep:harvest(source) == ERR.NOT_IN_RANGE then
+    if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
         creep:moveTo(source)
     end
 end
@@ -618,7 +613,7 @@ function M.hauler(creep)
         local dropped = findDroppedEnergy(creep)
         if dropped then
             drawTargetLine(creep, dropped, "#ffd54f")
-            if creep:pickup(dropped) == ERR.NOT_IN_RANGE then
+            if creep:pickup(dropped) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(dropped)
             end
             return
@@ -628,7 +623,7 @@ function M.hauler(creep)
         local tomb = findEnergyTombstone(creep)
         if tomb then
             drawTargetLine(creep, tomb, "#ff8a65")
-            if creep:withdraw(tomb, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(tomb, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(tomb)
             end
             return
@@ -642,7 +637,7 @@ function M.hauler(creep)
         local srcContainer = findClosest(creep.pos, srcContainers)
         if srcContainer then
             drawTargetLine(creep, srcContainer, "#ffca28")
-            if creep:withdraw(srcContainer, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(srcContainer, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(srcContainer)
             end
             return
@@ -654,7 +649,7 @@ function M.hauler(creep)
             if storage and getUsedEnergy(storage.store) > 0 then
                 creep.memory.fromStorage = true
                 drawTargetLine(creep, storage, "#26c6da")
-                if creep:withdraw(storage, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+                if creep:withdraw(storage, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                     creep:moveTo(storage)
                 end
                 return
@@ -666,7 +661,7 @@ function M.hauler(creep)
             local anyC = findAnyEnergyContainer(creep)
             if anyC then
                 drawTargetLine(creep, anyC, "#ffca28")
-                if creep:withdraw(anyC, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+                if creep:withdraw(anyC, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                     creep:moveTo(anyC)
                 end
                 return
@@ -686,14 +681,14 @@ function M.hauler(creep)
     })
     if target then
         drawTargetLine(creep, target, "#26c6da")
-        if creep:transfer(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return
     end
 
     -- Fallback: supply an upgrader or builder with free energy capacity.
-    local myCreeps = creep.room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = creep.room:find(screeps.FIND.MY_CREEPS) or {}
     local needy = {}
     for _, c in ipairs(myCreeps) do
         if c.id ~= creep.id and c.memory then
@@ -707,13 +702,13 @@ function M.hauler(creep)
     local recipient = findClosest(creep.pos, needy)
     if recipient then
         drawTargetLine(creep, recipient, "#80deea")
-        if creep:transfer(recipient, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:transfer(recipient, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(recipient)
         end
         return
     end
 
-    local spawns = creep.room:find(FIND.MY_SPAWNS)
+    local spawns = creep.room:find(screeps.FIND.MY_SPAWNS)
     local spawn = findClosest(creep.pos, spawns)
     if spawn and creep.pos:getRangeTo(spawn) > 3 then
         creep:moveTo(spawn)
@@ -734,13 +729,13 @@ end
 
 -- Construction site priority (lower number = higher priority).
 local function sitePriority(stype)
-    if stype == STRUCTURE.SPAWN or stype == STRUCTURE.EXTENSION or stype == STRUCTURE.TOWER then
+    if stype == screeps.STRUCTURE.SPAWN or stype == screeps.STRUCTURE.EXTENSION or stype == screeps.STRUCTURE.TOWER then
         return 1
-    elseif stype == STRUCTURE.CONTAINER or stype == STRUCTURE.STORAGE or stype == STRUCTURE.LINK then
+    elseif stype == screeps.STRUCTURE.CONTAINER or stype == screeps.STRUCTURE.STORAGE or stype == screeps.STRUCTURE.LINK then
         return 2
-    elseif stype == STRUCTURE.ROAD then
+    elseif stype == screeps.STRUCTURE.ROAD then
         return 3
-    elseif stype == STRUCTURE.RAMPART then
+    elseif stype == screeps.STRUCTURE.RAMPART then
         return 4
     end
     return 5
@@ -756,7 +751,7 @@ function M.builder(creep)
     end
 
     -- Priority 1: build construction sites by tier, closest within highest tier.
-    local sites = creep.room:find(FIND.CONSTRUCTION_SITES)
+    local sites = creep.room:find(screeps.FIND.CONSTRUCTION_SITES)
     if sites and #sites > 0 then
         local bestTier = 99
         for _, site in ipairs(sites) do
@@ -776,7 +771,7 @@ function M.builder(creep)
         local targetSite = findClosest(creep.pos, tierSites)
         if targetSite then
             drawTargetLine(creep, targetSite, "#66bb6a")
-            if creep:build(targetSite) == ERR.NOT_IN_RANGE then
+            if creep:build(targetSite) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(targetSite)
             end
             return
@@ -787,7 +782,7 @@ function M.builder(creep)
     local rcl = (creep.room.controller and creep.room.controller.level) or 1
     local rampartCap = math.min(50000, rcl * 10000)
 
-    local structures = creep.room:find(FIND.STRUCTURES) or {}
+    local structures = creep.room:find(screeps.FIND.STRUCTURES) or {}
     local worstRegular = nil
     local worstRatio = 0.8
     local worstRampart = nil
@@ -795,12 +790,12 @@ function M.builder(creep)
 
     for _, s in ipairs(structures) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCTURE.RAMPART then
+            if s.structureType == screeps.STRUCTURE.RAMPART then
                 if s.hits < lowestRampartHits and s.hits < s.hitsMax then
                     lowestRampartHits = s.hits
                     worstRampart = s
                 end
-            elseif s.structureType ~= STRUCTURE.WALL then
+            elseif s.structureType ~= screeps.STRUCTURE.WALL then
                 local ratio = s.hits / s.hitsMax
                 if ratio < worstRatio then
                     worstRatio = ratio
@@ -813,7 +808,7 @@ function M.builder(creep)
     local repairTarget = worstRegular or worstRampart
     if repairTarget then
         drawTargetLine(creep, repairTarget, "#ffa726")
-        if creep:repair(repairTarget) == ERR.NOT_IN_RANGE then
+        if creep:repair(repairTarget) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(repairTarget)
         end
         return
@@ -828,11 +823,11 @@ local function findCombatRampart(creep, target, maxEngageRange)
     if not target or not target.pos then
         return nil
     end
-    local myStructs = creep.room:find(FIND.MY_STRUCTURES) or {}
+    local myStructs = creep.room:find(screeps.FIND.MY_STRUCTURES) or {}
     local best = nil
     local bestDist = 999
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCTURE.RAMPART and s.pos and not isOnEdge(s.pos) then
+        if s.structureType == screeps.STRUCTURE.RAMPART and s.pos and not isOnEdge(s.pos) then
             local distToTarget = s.pos:getRangeTo(target)
             if distToTarget <= maxEngageRange then
                 local distToCreep = creep.pos:getRangeTo(s)
@@ -866,7 +861,7 @@ function M.defender(creep)
         return
     end
 
-    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+    local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         -- Prefer interior hostiles (not standing on exit border tiles) when available.
         local interiorHostiles = {}
@@ -902,7 +897,7 @@ function M.defender(creep)
             local chaseY = clamp(target.pos.y, 1, 48)
 
             if creep.attack then
-                if creep:attack(target) == ERR.NOT_IN_RANGE then
+                if creep:attack(target) == screeps.ERR.NOT_IN_RANGE then
                     if isOnEdge(target.pos) then
                         creep:moveTo(chaseX, chaseY)
                     else
@@ -921,7 +916,7 @@ function M.defender(creep)
     end
 
     -- Patrol near primary spawn / north-east perimeter (staying inside x=2..47, y=2..47).
-    local spawns = room:find(FIND.MY_SPAWNS)
+    local spawns = room:find(screeps.FIND.MY_SPAWNS)
     local spawn = findClosest(creep.pos, spawns)
     if spawn and spawn.pos then
         local px = clamp(spawn.pos.x + 3, 2, 47)
@@ -1005,7 +1000,7 @@ function M.scout(creep)
             stepOffEdge(creep)
             return
         end
-        local spawns = room:find(FIND.MY_SPAWNS)
+        local spawns = room:find(screeps.FIND.MY_SPAWNS)
         local spawn = findClosest(creep.pos, spawns)
         if spawn and spawn.pos and creep.pos:getRangeTo(spawn) > 4 then
             creep:moveTo(spawn)
@@ -1019,7 +1014,7 @@ function M.scout(creep)
         return
     end
 
-    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+    local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         -- Hostiles spotted: intel recorded, retreat back home immediately.
         creep.memory.targetRoom = nil
@@ -1048,7 +1043,7 @@ local function resolveRemoteSource(creep)
         creep.memory.sourceId = nil
     end
 
-    local sources = creep.room:find(FIND.SOURCES) or {}
+    local sources = creep.room:find(screeps.FIND.SOURCES) or {}
     if #sources == 0 then
         return nil
     end
@@ -1058,7 +1053,7 @@ local function resolveRemoteSource(creep)
         assignedCounts[src.id] = 0
     end
 
-    local myCreeps = creep.room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = creep.room:find(screeps.FIND.MY_CREEPS) or {}
     for _, c in ipairs(myCreeps) do
         if c.id ~= creep.id and c.memory and c.memory.role == "remoteHarvester" and c.memory.sourceId then
             if assignedCounts[c.memory.sourceId] ~= nil then
@@ -1097,7 +1092,7 @@ function M.remoteHarvester(creep)
 
     -- Flee back home if hostiles appear in any non-home room.
     if room.name ~= homeRoom then
-        local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+        local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
         if #hostiles > 0 then
             moveAcrossExit(creep, homeRoom, nil)
             return
@@ -1108,7 +1103,7 @@ function M.remoteHarvester(creep)
         if room.name ~= homeRoom then
             moveAcrossExit(creep, homeRoom, nil)
         else
-            local spawns = room:find(FIND.MY_SPAWNS)
+            local spawns = room:find(screeps.FIND.MY_SPAWNS)
             local spawn = findClosest(creep.pos, spawns)
             if spawn and spawn.pos and creep.pos:getRangeTo(spawn) > 4 then
                 creep:moveTo(spawn)
@@ -1122,7 +1117,7 @@ function M.remoteHarvester(creep)
         if room.name == homeRoom then
             local rIntel = screeps.Memory and screeps.Memory.roomIntel and screeps.Memory.roomIntel[targetRoom]
             if rIntel and (rIntel.hostiles or 0) > 0 then
-                local spawns = room:find(FIND.MY_SPAWNS)
+                local spawns = room:find(screeps.FIND.MY_SPAWNS)
                 local spawn = findClosest(creep.pos, spawns)
                 if spawn and spawn.pos and creep.pos:getRangeTo(spawn) > 4 then
                     creep:moveTo(spawn)
@@ -1149,7 +1144,7 @@ function M.remoteHarvester(creep)
     end
 
     drawTargetLine(creep, source, "#26c6da")
-    if creep:harvest(source) == ERR.NOT_IN_RANGE then
+    if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
         creep:moveTo(source)
         return
     end
@@ -1161,23 +1156,23 @@ function M.remoteHarvester(creep)
         local containers = findContainersNear(room, creep.pos, 1, nil)
         for _, c in ipairs(containers) do
             if getFreeEnergy(c.store) > 0 then
-                creep:transfer(c, RESOURCE.ENERGY)
+                creep:transfer(c, screeps.RESOURCE.ENERGY)
                 return
             end
         end
 
-        local myCreeps = room:find(FIND.MY_CREEPS) or {}
+        local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
         for _, c in ipairs(myCreeps) do
             if c.id ~= creep.id and c.memory and c.memory.role == "remoteHauler" and c.pos then
                 if creep.pos:getRangeTo(c) <= 1 and getFreeEnergy(c.store) > 0 then
-                    creep:transfer(c, RESOURCE.ENERGY)
+                    creep:transfer(c, screeps.RESOURCE.ENERGY)
                     return
                 end
             end
         end
 
         if free == 0 and creep.drop then
-            creep:drop(RESOURCE.ENERGY)
+            creep:drop(screeps.RESOURCE.ENERGY)
         end
     end
 end
@@ -1200,7 +1195,7 @@ function M.remoteHauler(creep)
 
     -- Flee back home immediately if hostiles appear in a non-home room.
     if room.name ~= homeRoom then
-        local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+        local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
         if #hostiles > 0 then
             moveAcrossExit(creep, homeRoom, nil)
             return
@@ -1222,7 +1217,7 @@ function M.remoteHauler(creep)
             if room.name == homeRoom then
                 local rIntel = screeps.Memory and screeps.Memory.roomIntel and screeps.Memory.roomIntel[targetRoom]
                 if rIntel and (rIntel.hostiles or 0) > 0 then
-                    local spawns = room:find(FIND.MY_SPAWNS)
+                    local spawns = room:find(screeps.FIND.MY_SPAWNS)
                     local spawn = findClosest(creep.pos, spawns)
                     if spawn and spawn.pos and creep.pos:getRangeTo(spawn) > 4 then
                         creep:moveTo(spawn)
@@ -1246,7 +1241,7 @@ function M.remoteHauler(creep)
         local dropped = findDroppedEnergy(creep)
         if dropped then
             drawTargetLine(creep, dropped, "#26c6da")
-            if creep:pickup(dropped) == ERR.NOT_IN_RANGE then
+            if creep:pickup(dropped) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(dropped)
             end
             return
@@ -1256,7 +1251,7 @@ function M.remoteHauler(creep)
         local tomb = findEnergyTombstone(creep)
         if tomb then
             drawTargetLine(creep, tomb, "#ff8a65")
-            if creep:withdraw(tomb, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(tomb, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(tomb)
             end
             return
@@ -1266,7 +1261,7 @@ function M.remoteHauler(creep)
         local container = findAnyEnergyContainer(creep)
         if container then
             drawTargetLine(creep, container, "#26c6da")
-            if creep:withdraw(container, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(container, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(container)
             end
             return
@@ -1279,7 +1274,7 @@ function M.remoteHauler(creep)
         end
 
         -- Otherwise stage near a remoteHarvester or source waiting for drops.
-        local myCreeps = room:find(FIND.MY_CREEPS) or {}
+        local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
         local harvesters = {}
         for _, c in ipairs(myCreeps) do
             if c.memory and c.memory.role == "remoteHarvester" then
@@ -1310,14 +1305,14 @@ function M.remoteHauler(creep)
     })
     if target then
         drawTargetLine(creep, target, "#26c6da")
-        if creep:transfer(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return
     end
 
     -- Fallback: hand off to an upgrader or builder needing energy.
-    local myCreeps = room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
     local needy = {}
     for _, c in ipairs(myCreeps) do
         if c.id ~= creep.id and c.memory then
@@ -1330,20 +1325,20 @@ function M.remoteHauler(creep)
     local recipient = findClosest(creep.pos, needy)
     if recipient then
         drawTargetLine(creep, recipient, "#80deea")
-        if creep:transfer(recipient, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:transfer(recipient, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(recipient)
         end
         return
     end
 
     -- Last resort: drop near primary spawn so haulers/upgraders can use it.
-    local spawns = room:find(FIND.MY_SPAWNS)
+    local spawns = room:find(screeps.FIND.MY_SPAWNS)
     local spawn = findClosest(creep.pos, spawns)
     if spawn and spawn.pos then
         if creep.pos:getRangeTo(spawn) > 2 then
             creep:moveTo(spawn)
         elseif creep.drop and getUsedEnergy(creep.store) > 0 then
-            creep:drop(RESOURCE.ENERGY)
+            creep:drop(screeps.RESOURCE.ENERGY)
         end
     end
 end
@@ -1352,7 +1347,7 @@ end
 local function inspectAssaultWave(room)
     local staged = {}
     local hasHealer = false
-    local myCreeps = room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
     for _, c in ipairs(myCreeps) do
         if c.memory then
             local r = c.memory.role
@@ -1394,7 +1389,7 @@ local function handleAssaultTransit(creep)
 
     if room.name == homeRoom then
         -- Defend home immediately if enemy raiders are inside!
-        local homeHostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+        local homeHostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
         if #homeHostiles > 0 then
             return true
         end
@@ -1474,7 +1469,7 @@ local function selectAssaultTarget(creep)
     end
 
     local chosen = nil
-    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
+    local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local bestScore = math.mininteger
         for _, h in ipairs(hostiles) do
@@ -1484,10 +1479,10 @@ local function selectAssaultTarget(creep)
             if h.body then
                 for _, p in ipairs(h.body) do
                     local pt = (type(p) == "table" and p.type) or p
-                    if pt == PART.HEAL then
+                    if pt == screeps.PART.HEAL then
                         s = s + 60
                         break
-                    elseif pt == PART.ATTACK or pt == PART.RANGED_ATTACK then
+                    elseif pt == screeps.PART.ATTACK or pt == screeps.PART.RANGED_ATTACK then
                         s = s + 35
                         break
                     end
@@ -1501,14 +1496,14 @@ local function selectAssaultTarget(creep)
     end
 
     if not chosen then
-        local hStructs = room:find(FIND.HOSTILE_STRUCTURES) or {}
+        local hStructs = room:find(screeps.FIND.HOSTILE_STRUCTURES) or {}
         local towers, spawns, others = {}, {}, {}
         for _, s in ipairs(hStructs) do
-            if s.structureType == STRUCTURE.TOWER then
+            if s.structureType == screeps.STRUCTURE.TOWER then
                 table.insert(towers, s)
-            elseif s.structureType == STRUCTURE.SPAWN then
+            elseif s.structureType == screeps.STRUCTURE.SPAWN then
                 table.insert(spawns, s)
-            elseif s.structureType ~= STRUCTURE.CONTROLLER then
+            elseif s.structureType ~= screeps.STRUCTURE.CONTROLLER then
                 table.insert(others, s)
             end
         end
@@ -1536,7 +1531,7 @@ function M.assault(creep)
     end
     -- Pull back to friendly healer if critically low HP (< 25%).
     if creep.hits and creep.hitsMax and creep.hits < creep.hitsMax * 0.25 then
-        local myCreeps = creep.room:find(FIND.MY_CREEPS) or {}
+        local myCreeps = creep.room:find(screeps.FIND.MY_CREEPS) or {}
         for _, ally in ipairs(myCreeps) do
             if ally.id ~= creep.id and ally.memory and ally.memory.role == "healer" then
                 creep:moveTo(ally)
@@ -1552,7 +1547,7 @@ function M.assault(creep)
         return
     end
     drawTargetLine(creep, target, "#ff5252")
-    if creep:attack(target) == ERR.NOT_IN_RANGE then
+    if creep:attack(target) == screeps.ERR.NOT_IN_RANGE then
         creep:moveTo(target)
     end
 end
@@ -1565,7 +1560,7 @@ function M.healer(creep)
     if not handleAssaultTransit(creep) then
         return
     end
-    local myCreeps = creep.room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = creep.room:find(screeps.FIND.MY_CREEPS) or {}
     local wounded = nil
     local lowestRatio = 1.0
     local bruisers = {}

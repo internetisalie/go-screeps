@@ -3,11 +3,6 @@
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
-local ERR <const> = screeps.ERR
-local FIND <const> = screeps.FIND
-local PART <const> = screeps.PART
-local RESOURCE <const> = screeps.RESOURCE
-local STRUCTURE <const> = screeps.STRUCTURE
 
 ---@class RaiderEconomy
 local M = {}
@@ -41,26 +36,26 @@ local function cachedFind(room, key, findConst)
 end
 
 local SITE_PRIORITY = {
-    [STRUCTURE.TOWER or "tower"] = 1,
-    [STRUCTURE.EXTENSION or "extension"] = 2,
-    [STRUCTURE.CONTAINER or "container"] = 3,
-    [STRUCTURE.STORAGE or "storage"] = 4,
-    [STRUCTURE.RAMPART or "rampart"] = 5,
-    [STRUCTURE.ROAD or "road"] = 6,
+    [screeps.STRUCTURE.TOWER or "tower"] = 1,
+    [screeps.STRUCTURE.EXTENSION or "extension"] = 2,
+    [screeps.STRUCTURE.CONTAINER or "container"] = 3,
+    [screeps.STRUCTURE.STORAGE or "storage"] = 4,
+    [screeps.STRUCTURE.RAMPART or "rampart"] = 5,
+    [screeps.STRUCTURE.ROAD or "road"] = 6,
 }
 
 local function getUsedEnergy(store)
     if not store or not store.getUsedCapacity then
         return 0
     end
-    return store:getUsedCapacity(RESOURCE.ENERGY) or 0
+    return store:getUsedCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 local function getFreeEnergy(store)
     if not store or not store.getFreeCapacity then
         return 0
     end
-    return store:getFreeCapacity(RESOURCE.ENERGY) or 0
+    return store:getFreeCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
 -- Build a harvester body: fast mobile worker during bootstrap (no hauler),
@@ -71,12 +66,12 @@ function M.buildHarvesterBody(budget, hasHauler)
     end
     if not hasHauler then
         if budget >= 250 then
-            return { PART.WORK, PART.CARRY, PART.MOVE, PART.MOVE } -- 250: 1 tile/tick on plains for fast bootstrap
+            return { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE, screeps.PART.MOVE } -- 250: 1 tile/tick on plains for fast bootstrap
         end
-        return { PART.WORK, PART.CARRY, PART.MOVE } -- 200
+        return { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE } -- 200
     end
     if budget < 300 then
-        return { PART.WORK, PART.CARRY, PART.MOVE }
+        return { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE }
     end
 
     local body = {}
@@ -88,19 +83,19 @@ function M.buildHarvesterBody(budget, hasHauler)
         maxWork = 2
     end
     for _ = 1, maxWork do
-        table.insert(body, PART.WORK)
+        table.insert(body, screeps.PART.WORK)
         cost = cost + 100
     end
 
     if cost + 50 <= budget then
-        table.insert(body, PART.CARRY)
+        table.insert(body, screeps.PART.CARRY)
         cost = cost + 50
     end
 
     local desiredMove = math.max(1, math.min(3, math.ceil(maxWork / 2)))
     for _ = 1, desiredMove do
         if cost + 50 <= budget then
-            table.insert(body, PART.MOVE)
+            table.insert(body, screeps.PART.MOVE)
             cost = cost + 50
         end
     end
@@ -112,7 +107,7 @@ end
 function M.buildHaulerBody(budget)
     if budget < 150 then
         if budget >= 100 then
-            return { PART.CARRY, PART.MOVE }
+            return { screeps.PART.CARRY, screeps.PART.MOVE }
         end
         return nil
     end
@@ -120,12 +115,12 @@ function M.buildHaulerBody(budget)
     local body = {}
     local cost = 0
     while cost + 100 <= budget and #body + 2 <= 16 do
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
         cost = cost + 100
     end
     if cost + 50 <= budget and #body + 1 <= 16 then
-        table.insert(body, PART.CARRY)
+        table.insert(body, screeps.PART.CARRY)
     end
     return body
 end
@@ -135,17 +130,17 @@ function M.buildWorkerBody(budget)
     if budget < 200 then
         return nil
     end
-    local body = { PART.WORK, PART.CARRY, PART.MOVE }
+    local body = { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE }
     local cost = 200
     while cost + 200 <= budget and #body + 3 <= 15 do
-        table.insert(body, PART.WORK)
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.WORK)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
         cost = cost + 200
     end
     if cost + 100 <= budget and #body + 2 <= 15 then
-        table.insert(body, PART.CARRY)
-        table.insert(body, PART.MOVE)
+        table.insert(body, screeps.PART.CARRY)
+        table.insert(body, screeps.PART.MOVE)
     end
     return body
 end
@@ -157,7 +152,7 @@ local function countRoomHaulers(room)
         return c.haulerCount
     end
     local count = 0
-    local myCreeps = cachedFind(room, "myCreeps", FIND.MY_CREEPS)
+    local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
     for _, cr in ipairs(myCreeps) do
         if cr.memory and cr.memory.role == "hauler" then
             count = count + 1
@@ -177,7 +172,7 @@ local function getAssignedSource(creep)
         end
     end
 
-    local sources = room:find(FIND.SOURCES) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {}
     if #sources == 0 then
         return nil
     end
@@ -186,7 +181,7 @@ local function getAssignedSource(creep)
     for _, s in ipairs(sources) do
         assigned[s.id] = 0
     end
-    local myCreeps = room:find(FIND.MY_CREEPS) or {}
+    local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
     for _, other in ipairs(myCreeps) do
         if other.id ~= creep.id and other.memory and other.memory.role == "harvester" and other.memory.sourceId then
             if assigned[other.memory.sourceId] ~= nil then
@@ -215,9 +210,9 @@ local function findAdjacentContainer(room, pos)
     if not pos then
         return nil
     end
-    local structs = cachedFind(room, "structures", FIND.STRUCTURES)
+    local structs = cachedFind(room, "structures", screeps.FIND.STRUCTURES)
     for _, s in ipairs(structs) do
-        if s.structureType == STRUCTURE.CONTAINER and s.pos and pos:getRangeTo(s) <= 2 then
+        if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos and pos:getRangeTo(s) <= 2 then
             return s
         end
     end
@@ -227,24 +222,24 @@ end
 -- Find spawn/extension/tower needing energy delivery.
 local function findRefillTarget(creep, includeTowers, includeStorage)
     local room = creep.room
-    local myStructs = cachedFind(room, "myStructures", FIND.MY_STRUCTURES)
+    local myStructs = cachedFind(room, "myStructures", screeps.FIND.MY_STRUCTURES)
 
     local primary = {}
     local towers = {}
     local storage = nil
 
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCTURE.SPAWN or s.structureType == STRUCTURE.EXTENSION then
+        if s.structureType == screeps.STRUCTURE.SPAWN or s.structureType == screeps.STRUCTURE.EXTENSION then
             if getFreeEnergy(s.store) > 0 then
                 table.insert(primary, s)
             end
-        elseif includeTowers and s.structureType == STRUCTURE.TOWER then
+        elseif includeTowers and s.structureType == screeps.STRUCTURE.TOWER then
             local used = getUsedEnergy(s.store)
             local free = getFreeEnergy(s.store)
             if free > 0 and used < 750 then
                 table.insert(towers, s)
             end
-        elseif includeStorage and s.structureType == STRUCTURE.STORAGE then
+        elseif includeStorage and s.structureType == screeps.STRUCTURE.STORAGE then
             if getFreeEnergy(s.store) > 0 then
                 storage = s
             end
@@ -265,24 +260,24 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
     local room = creep.room
 
     -- 1. Dropped energy resources (highest efficiency: zero decay waste).
-    local dropped = cachedFind(room, "dropped", FIND.DROPPED_RESOURCES)
+    local dropped = cachedFind(room, "dropped", screeps.FIND.DROPPED_RESOURCES)
     local goodDrops = {}
     for _, r in ipairs(dropped) do
-        if r.resourceType == RESOURCE.ENERGY and (r.amount or 0) >= 25 then
+        if r.resourceType == screeps.RESOURCE.ENERGY and (r.amount or 0) >= 25 then
             table.insert(goodDrops, r)
         end
     end
     if #goodDrops > 0 then
         local target = creep.pos:findClosestByRange(goodDrops) or goodDrops[1]
-        if creep:pickup(target) == ERR.NOT_IN_RANGE then
+        if creep:pickup(target) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return true
     end
 
     -- 2. Tombstones with energy.
-    if FIND.TOMBSTONES then
-        local tombs = cachedFind(room, "tombs", FIND.TOMBSTONES)
+    if screeps.FIND.TOMBSTONES then
+        local tombs = cachedFind(room, "tombs", screeps.FIND.TOMBSTONES)
         local goodTombs = {}
         for _, t in ipairs(tombs) do
             if getUsedEnergy(t.store) >= 20 then
@@ -291,7 +286,7 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
         end
         if #goodTombs > 0 then
             local target = creep.pos:findClosestByRange(goodTombs) or goodTombs[1]
-            if creep:withdraw(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:withdraw(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
             end
             return true
@@ -299,19 +294,19 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
     end
 
     -- 3. Source containers with energy.
-    local structs = cachedFind(room, "structures", FIND.STRUCTURES)
+    local structs = cachedFind(room, "structures", screeps.FIND.STRUCTURES)
     local containers = {}
     local storage = nil
     for _, s in ipairs(structs) do
-        if s.structureType == STRUCTURE.CONTAINER and getUsedEnergy(s.store) >= 50 then
+        if s.structureType == screeps.STRUCTURE.CONTAINER and getUsedEnergy(s.store) >= 50 then
             table.insert(containers, s)
-        elseif allowStorage and s.structureType == STRUCTURE.STORAGE and getUsedEnergy(s.store) >= 100 then
+        elseif allowStorage and s.structureType == screeps.STRUCTURE.STORAGE and getUsedEnergy(s.store) >= 100 then
             storage = s
         end
     end
     if #containers > 0 then
         local target = creep.pos:findClosestByRange(containers) or containers[1]
-        if creep:withdraw(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:withdraw(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return true
@@ -319,7 +314,7 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
 
     -- 4. Storage (when allowed).
     if storage then
-        if creep:withdraw(storage, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+        if creep:withdraw(storage, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(storage)
         end
         return true
@@ -327,10 +322,10 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
 
     -- 5. Direct harvest fallback for workers when containers aren't built yet.
     if allowHarvest then
-        local sources = room:find(FIND.SOURCES_ACTIVE) or room:find(FIND.SOURCES) or {}
+        local sources = room:find(screeps.FIND.SOURCES_ACTIVE) or room:find(screeps.FIND.SOURCES) or {}
         if #sources > 0 then
             local src = creep.pos:findClosestByRange(sources) or sources[1]
-            if creep:harvest(src) == ERR.NOT_IN_RANGE then
+            if creep:harvest(src) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(src)
             end
             return true
@@ -363,15 +358,15 @@ local function runHarvester(creep)
         end
 
         if free > 0 then
-            if creep:harvest(source) == ERR.NOT_IN_RANGE then
+            if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(source)
             end
         elseif container and getFreeEnergy(container.store) > 0 then
-            if creep:transfer(container, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:transfer(container, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(container)
             end
         elseif creep.drop then
-            creep:drop(RESOURCE.ENERGY)
+            creep:drop(screeps.RESOURCE.ENERGY)
         end
         return
     end
@@ -384,17 +379,17 @@ local function runHarvester(creep)
     end
 
     if not creep.memory.delivering then
-        if creep:harvest(source) == ERR.NOT_IN_RANGE then
+        if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(source)
         end
     else
         local target = findRefillTarget(creep, true, false)
         if target then
-            if creep:transfer(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
             end
         elseif room.controller and room.controller.my then
-            if creep:upgradeController(room.controller) == ERR.NOT_IN_RANGE then
+            if creep:upgradeController(room.controller) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(room.controller)
             end
         end
@@ -416,13 +411,13 @@ local function runHauler(creep)
     if creep.memory.delivering then
         local target = findRefillTarget(creep, true, true)
         if target then
-            if creep:transfer(target, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
             end
             return
         end
         -- If everything is full, feed an upgrader creep near the controller.
-        local myCreeps = cachedFind(room, "myCreeps", FIND.MY_CREEPS)
+        local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
         local upgraders = {}
         for _, c in ipairs(myCreeps) do
             if c.memory and c.memory.role == "upgrader" and getFreeEnergy(c.store) >= 25 then
@@ -431,7 +426,7 @@ local function runHauler(creep)
         end
         if #upgraders > 0 then
             local u = creep.pos:findClosestByRange(upgraders) or upgraders[1]
-            if creep:transfer(u, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
+            if creep:transfer(u, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(u)
             end
         end
@@ -441,7 +436,7 @@ local function runHauler(creep)
         local got = acquireEnergy(creep, false, needRefill)
         if not got then
             -- Park near a harvester to catch dropped energy.
-            local myCreeps = cachedFind(room, "myCreeps", FIND.MY_CREEPS)
+            local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
             for _, c in ipairs(myCreeps) do
                 if c.memory and c.memory.role == "harvester" and c.pos then
                     if creep.pos:getRangeTo(c) > 2 then
@@ -472,17 +467,17 @@ local function runBuilder(creep)
     end
 
     -- 1. Urgent repairs (critical ramparts, damaged towers/spawns/containers).
-    local structs = room:find(FIND.STRUCTURES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {}
     local urgent = nil
     local urgentScore = 9999999
     for _, s in ipairs(structs) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCTURE.RAMPART and s.hits < 5000 then
+            if s.structureType == screeps.STRUCTURE.RAMPART and s.hits < 5000 then
                 if s.hits < urgentScore then
                     urgentScore = s.hits
                     urgent = s
                 end
-            elseif (s.structureType == STRUCTURE.CONTAINER or s.structureType == STRUCTURE.TOWER or s.structureType == STRUCTURE.SPAWN) and s.hits < s.hitsMax * 0.65 then
+            elseif (s.structureType == screeps.STRUCTURE.CONTAINER or s.structureType == screeps.STRUCTURE.TOWER or s.structureType == screeps.STRUCTURE.SPAWN) and s.hits < s.hitsMax * 0.65 then
                 if s.hits < urgentScore then
                     urgentScore = s.hits
                     urgent = s
@@ -491,14 +486,14 @@ local function runBuilder(creep)
         end
     end
     if urgent then
-        if creep:repair(urgent) == ERR.NOT_IN_RANGE then
+        if creep:repair(urgent) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(urgent)
         end
         return
     end
 
     -- 2. Prioritized construction sites (Tower > Extension > Container > Storage > Rampart > Road).
-    local sites = room:find(FIND.MY_CONSTRUCTION_SITES) or room:find(FIND.CONSTRUCTION_SITES) or {}
+    local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or room:find(screeps.FIND.CONSTRUCTION_SITES) or {}
     if #sites > 0 then
         local bestSite = sites[1]
         local bestPrio = SITE_PRIORITY[bestSite.structureType] or 99
@@ -513,7 +508,7 @@ local function runBuilder(creep)
                 bestDist = dist
             end
         end
-        if creep:build(bestSite) == ERR.NOT_IN_RANGE then
+        if creep:build(bestSite) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(bestSite)
         end
         return
@@ -523,7 +518,7 @@ local function runBuilder(creep)
     local repairable = {}
     for _, s in ipairs(structs) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCTURE.WALL or s.structureType == STRUCTURE.RAMPART then
+            if s.structureType == screeps.STRUCTURE.WALL or s.structureType == screeps.STRUCTURE.RAMPART then
                 if s.hits < 25000 then
                     table.insert(repairable, s)
                 end
@@ -534,7 +529,7 @@ local function runBuilder(creep)
     end
     if #repairable > 0 then
         local target = creep.pos:findClosestByRange(repairable) or repairable[1]
-        if creep:repair(target) == ERR.NOT_IN_RANGE then
+        if creep:repair(target) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(target)
         end
         return
@@ -542,7 +537,7 @@ local function runBuilder(creep)
 
     -- 4. Fallback: help upgrade controller so builders are never idle.
     if room.controller and room.controller.my then
-        if creep:upgradeController(room.controller) == ERR.NOT_IN_RANGE then
+        if creep:upgradeController(room.controller) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(room.controller)
         end
     end
@@ -565,7 +560,7 @@ local function runUpgrader(creep)
     else
         local ctrl = room.controller
         if ctrl and ctrl.my then
-            if creep:upgradeController(ctrl) == ERR.NOT_IN_RANGE then
+            if creep:upgradeController(ctrl) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(ctrl)
             end
         end
