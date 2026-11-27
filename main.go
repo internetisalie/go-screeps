@@ -2004,7 +2004,7 @@ func main() {
 	}
 
 	app := gowaku.App{
-		Title:     "Go-Screeps (Isometric)",
+		Title:     "Go-Screeps",
 		Width:     1280,
 		Height:    800,
 		ThemeMode: gowaku.ThemeDark,
