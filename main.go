@@ -674,6 +674,7 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 		s.lastPos = e.Pos
 		if e.Pos.Sub(s.downPos).Length() > 4 {
 			s.dragMoved = true
+			s.followCam = false
 		}
 		s.cam.PanX += dx
 		s.cam.PanY += dy
@@ -697,6 +698,8 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 					for _, obj := range s.snap.Objects {
 						if obj.X == gx && obj.Y == gy && (obj.Type == "creep" || obj.Type == "powerCreep") {
 							s.cam.FollowID = obj.ID
+							s.followCam = true
+							s.cam.CenterOnTile(gx, gy)
 							break
 						}
 					}
