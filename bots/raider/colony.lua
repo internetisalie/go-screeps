@@ -2,6 +2,12 @@
 -- Coordinates home defense, economy, scouting, synchronized raid wave spawning, planning, and HUD visuals.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
+local screeps <const> = require("screeps")
+local OK <const> = screeps.OK
+local FIND <const> = screeps.FIND
+local PART <const> = screeps.PART
+local COST <const> = screeps.COST
+
 local economy <const> = require("economy")
 local planner <const> = require("planner")
 local combat <const> = require("combat")
@@ -62,7 +68,7 @@ local FALLBACK_PART_COST = {
 ---@param body BodyPartType[]
 ---@return integer
 local function bodyCost(body)
-    local costs = BODYPART_COST or FALLBACK_PART_COST
+    local costs = COST or FALLBACK_PART_COST
     local total = 0
     for _, part in ipairs(body) do
         total = total + (costs[part] or 0)
@@ -93,10 +99,10 @@ end
 ---@return RaiderRoleCounts
 function RaiderColony.countGlobalRoles()
     local counts = makeRoleCounter()
-    if not Game.creeps then
+    if not screeps.Game.creeps then
         return counts
     end
-    for _, creep in pairs(Game.creeps) do
+    for _, creep in pairs(screeps.Game.creeps) do
         counts.total = counts.total + 1
         local role = (creep.memory and creep.memory.role) or "harvester"
         if counts[role] ~= nil then
@@ -111,16 +117,16 @@ end
 ---@param globalCounts RaiderRoleCounts
 ---@return RaiderColony
 function RaiderColony.new(room, globalCounts)
-    if not Memory.rooms then
-        Memory.rooms = {}
+    if not screeps.Memory.rooms then
+        screeps.Memory.rooms = {}
     end
-    if not Memory.rooms[room.name] then
-        Memory.rooms[room.name] = room.memory or {}
+    if not screeps.Memory.rooms[room.name] then
+        screeps.Memory.rooms[room.name] = room.memory or {}
     end
     return setmetatable({
         room = room,
         rcl = (room.controller and room.controller.level) or 0,
-        memory = Memory.rooms[room.name],
+        memory = screeps.Memory.rooms[room.name],
         roomCounts = makeRoleCounter(),
         globalCounts = globalCounts,
         threatLevel = 0,
@@ -131,7 +137,7 @@ end
 ---@return RaiderRoleCounts
 function RaiderColony:countRoomRoles()
     local counts = makeRoleCounter()
-    local myCreeps = self.room:find(FIND_MY_CREEPS) or {} ---@type Creep[]
+    local myCreeps = self.room:find(FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, creep in ipairs(myCreeps) do
         counts.total = counts.total + 1
         local role = (creep.memory and creep.memory.role) or "harvester"
@@ -152,11 +158,11 @@ function RaiderColony:needsScout()
     if #adj == 0 then
         return false
     end
-    if not Memory.raidTarget then
+    if not screeps.Memory.raidTarget then
         return true
     end
-    local info = Memory.scoutedRooms and Memory.scoutedRooms[Memory.raidTarget]
-    if not info or ((Game.time or 0) - (info.lastSeen or 0)) > 250 then
+    local info = screeps.Memory.scoutedRooms and screeps.Memory.scoutedRooms[screeps.Memory.raidTarget]
+    if not info or ((screeps.Game.time or 0) - (info.lastSeen or 0)) > 250 then
         return true
     end
     return false
@@ -173,8 +179,8 @@ function RaiderColony:manageSpawning()
     local energyAvail = room.energyAvailable or 0
     local energyCap = math.max(energyAvail, room.energyCapacityAvailable or energyAvail)
 
-    local sources = room:find(FIND_SOURCES) or {} ---@type Source[]
-    local sites = room:find(FIND_MY_CONSTRUCTION_SITES) or room:find(FIND_CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+    local sources = room:find(FIND.SOURCES) or {} ---@type Source[]
+    local sites = room:find(FIND.MY_CONSTRUCTION_SITES) or room:find(FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
     local sourceCount = math.max(1, #sources)
 
     local wantHarvesters = math.max(2, math.min(3, sourceCount))
@@ -186,7 +192,7 @@ function RaiderColony:manageSpawning()
 
     local ecoHealthy = (roomCounts.harvester >= 2 and energyCap >= 300)
     local wantBrawlers, wantSkirmishers, wantMedics = 0, 0, 0
-    if ecoHealthy and self.threatLevel == 0 and Memory.raidTarget then
+    if ecoHealthy and self.threatLevel == 0 and screeps.Memory.raidTarget then
         wantBrawlers = (energyCap >= 800) and 3 or 2
         wantSkirmishers = (energyCap >= 550) and 2 or 1
         if energyCap >= 800 then
@@ -273,7 +279,7 @@ function RaiderColony:manageSpawning()
     elseif roleToSpawn == "defender" then
         body = combat.buildDefenderBody(budget)
     elseif roleToSpawn == "scout" then
-        body = { MOVE }
+        body = { PART.MOVE }
     elseif roleToSpawn == "brawler" then
         body = combat.buildBrawlerBody(budget)
     elseif roleToSpawn == "skirmisher" then
@@ -293,7 +299,7 @@ function RaiderColony:manageSpawning()
         return
     end
 
-    local name = "R_" .. roleToSpawn .. "_" .. tostring(Game.time or 0)
+    local name = "R_" .. roleToSpawn .. "_" .. tostring(screeps.Game.time or 0)
     local res = spawn:spawnCreep(body, name, {
         memory = {
             role = roleToSpawn,
@@ -389,7 +395,7 @@ function RaiderColony:run()
     combat.runTowers(self.room, self.hostiles)
     self:manageSpawning()
 
-    if (not self.memory.plan) or (Game.time and (Game.time % PLANNER_INTERVAL == 0)) then
+    if (not self.memory.plan) or (screeps.Game.time and (screeps.Game.time % PLANNER_INTERVAL == 0)) then
         planner.planRoom(self.room, self.rcl)
     end
 

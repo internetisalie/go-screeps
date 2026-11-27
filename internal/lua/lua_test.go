@@ -25,16 +25,37 @@ func TestConstantsAndAPI(t *testing.T) {
 	fsys := fstest.MapFS{
 		"bot/main.lua": &fstest.MapFile{
 			Data: []byte(`
-function loop()
+local screeps <const> = require("screeps")
+local OK <const> = screeps.OK
+local ERR <const> = screeps.ERR
+local FIND <const> = screeps.FIND
+local STRUCTURE <const> = screeps.STRUCTURE
+local RESOURCE <const> = screeps.RESOURCE
+local PART <const> = screeps.PART
+local DIR <const> = screeps.DIR
+local TERRAIN <const> = screeps.TERRAIN
+local COST <const> = screeps.COST
+local LOOK <const> = screeps.LOOK
+local CONST <const> = screeps.CONST
+local PathFinder <const> = screeps.PathFinder
+local RoomPosition <const> = screeps.RoomPosition
+
+local function loop(Game, Memory)
+    assert(Game == screeps.Game, "Game arg must match screeps.Game")
+    assert(Memory == screeps.Memory, "Memory arg must match screeps.Memory")
     assert(OK == 0, "OK")
-    assert(ERR_NOT_IN_RANGE == -9, "ERR_NOT_IN_RANGE")
-    assert(FIND_SOURCES == 105, "FIND_SOURCES")
-    assert(STRUCTURE_SPAWN == "spawn", "STRUCTURE_SPAWN")
-    assert(RESOURCE_ENERGY == "energy", "RESOURCE_ENERGY")
-    assert(WORK == "work" and CARRY == "carry" and MOVE == "move", "bodyparts")
-    assert(TOP == 1 and TOP_LEFT == 8, "directions")
-    assert(TERRAIN_MASK_WALL == 1 and TERRAIN_MASK_SWAMP == 2, "terrain")
-    assert(BODYPART_COST[WORK] == 100, "BODYPART_COST")
+    assert(ERR.NOT_IN_RANGE == -9, "ERR.NOT_IN_RANGE")
+    assert(FIND.SOURCES == 105, "FIND.SOURCES")
+    assert(STRUCTURE.SPAWN == "spawn", "STRUCTURE.SPAWN")
+    assert(RESOURCE.ENERGY == "energy", "RESOURCE.ENERGY")
+    assert(PART.WORK == "work" and PART.CARRY == "carry" and PART.MOVE == "move", "bodyparts")
+    assert(DIR.TOP == 1 and DIR.TOP_LEFT == 8, "directions")
+    assert(TERRAIN.WALL == 1 and TERRAIN.SWAMP == 2, "terrain")
+    assert(COST[PART.WORK] == 100, "COST")
+    assert(CONST.MAX_CREEP_SIZE == 50, "CONST.MAX_CREEP_SIZE")
+
+    local rp = RoomPosition(10, 20, "W1N1")
+    assert(rp.x == 10 and rp.y == 20 and rp.roomName == "W1N1", "RoomPosition")
 
     local room = Game.rooms["W1N1"]
     assert(room ~= nil, "room W1N1 missing")
@@ -46,15 +67,15 @@ function loop()
     local spawn = Game.spawns["Spawn1"]
     assert(spawn ~= nil, "Spawn1 missing")
     assert(spawn.my == true, "spawn.my")
-    assert(spawn.store[RESOURCE_ENERGY] == 300, "store index")
-    assert(spawn.store:getUsedCapacity(RESOURCE_ENERGY) == 300, "store getUsedCapacity")
-    assert(spawn.store:getFreeCapacity(RESOURCE_ENERGY) == 0, "store getFreeCapacity")
-    assert(spawn.store:getCapacity(RESOURCE_ENERGY) == 300, "store getCapacity")
+    assert(spawn.store[RESOURCE.ENERGY] == 300, "store index")
+    assert(spawn.store:getUsedCapacity(RESOURCE.ENERGY) == 300, "store getUsedCapacity")
+    assert(spawn.store:getFreeCapacity(RESOURCE.ENERGY) == 0, "store getFreeCapacity")
+    assert(spawn.store:getCapacity(RESOURCE.ENERGY) == 300, "store getCapacity")
 
     local byId = Game.getObjectById(spawn.id)
     assert(byId ~= nil and byId.id == spawn.id, "getObjectById")
 
-    local sources = room:find(FIND_SOURCES)
+    local sources = room:find(FIND.SOURCES)
     assert(#sources == 2, "expected 2 sources, got " .. tostring(#sources))
     local closest = spawn.pos:findClosestByRange(sources)
     assert(closest ~= nil, "findClosestByRange")
@@ -64,10 +85,10 @@ function loop()
     assert(spawn.pos:inRangeTo(spawn.pos.x + 2, spawn.pos.y, 2), "inRangeTo")
 
     local terrain = room:getTerrain()
-    assert(terrain:get(0, 0) == TERRAIN_MASK_WALL, "border wall")
-    assert(terrain:get(spawn.pos.x, spawn.pos.y) == TERRAIN_MASK_PLAIN, "spawn plain")
+    assert(terrain:get(0, 0) == TERRAIN.WALL, "border wall")
+    assert(terrain:get(spawn.pos.x, spawn.pos.y) == TERRAIN.PLAIN, "spawn plain")
 
-    local look = room:lookForAt(LOOK_STRUCTURES, spawn.pos.x, spawn.pos.y)
+    local look = room:lookForAt(LOOK.STRUCTURES, spawn.pos.x, spawn.pos.y)
     assert(#look == 1 and look[1].id == spawn.id, "lookForAt")
 
     local cm = PathFinder.CostMatrix()
@@ -88,8 +109,10 @@ function loop()
     room.visual:text("HUD", 2, 4, { color = "#ffffff" })
 
     assert(Game.cpu.getUsed() >= 0, "cpu.getUsed")
-    console.log("api_ok")
+    screeps.log("api_ok")
 end
+
+return { loop = loop }
 `),
 		},
 	}
@@ -125,11 +148,15 @@ func TestMemoryPersistence(t *testing.T) {
 	fsys := fstest.MapFS{
 		"bot/main.lua": &fstest.MapFile{
 			Data: []byte(`
-function loop()
+local screeps <const> = require("screeps")
+local PART <const> = screeps.PART
+local OK <const> = screeps.OK
+
+return function(Game, Memory)
     Memory.ticks = (Memory.ticks or 0) + 1
     local spawn = Game.spawns["Spawn1"]
     if Game.time == 1 and spawn then
-        local rc = spawn:spawnCreep({ WORK, CARRY, MOVE }, "worker1", {
+        local rc = spawn:spawnCreep({ PART.WORK, PART.CARRY, PART.MOVE }, "worker1", {
             memory = { role = "harvester", count = 10 }
         })
         assert(rc == OK, "spawnCreep failed: " .. tostring(rc))
@@ -159,12 +186,59 @@ end
 
 	// Verify Memory.ticks == 15 and Memory.creeps.worker1.count > 10.
 	if err := vm.DoString(`
+		local Memory = require("screeps").Memory
 		assert(Memory.ticks == 15, "ticks=" .. tostring(Memory.ticks))
 		assert(Memory.creeps.worker1 ~= nil, "worker1 memory missing")
 		assert(Memory.creeps.worker1.role == "harvester", "role mismatch")
 		assert(Memory.creeps.worker1.count > 10, "count did not increment: " .. tostring(Memory.creeps.worker1.count))
 	`); err != nil {
 		t.Fatalf("memory assertion failed: %v", err)
+	}
+}
+
+func TestZeroPlatformGlobals(t *testing.T) {
+	w := engine.NewWorld()
+	w.GenerateRoom("W1N1", 101)
+	_, _ = w.SpawnBot("Pure", "W1N1")
+	uid := w.EnsureUser("Pure")
+
+	fsys := fstest.MapFS{
+		"bot/main.lua": &fstest.MapFile{
+			Data: []byte(`
+local forbidden = {
+    "Game", "Memory", "OK", "ERR_NOT_IN_RANGE", "FIND_MY_CREEPS",
+    "STRUCTURE_SPAWN", "RESOURCE_ENERGY", "MOVE", "WORK", "BODYPART_COST",
+    "PathFinder", "RoomPosition", "console", "loop",
+}
+for _, name in ipairs(forbidden) do
+    assert(_G[name] == nil, "global " .. name .. " must be nil in _G")
+end
+
+local screeps <const> = require("screeps")
+assert(type(screeps) == "table", "require('screeps') must return a table")
+
+return function(Game, Memory)
+    for _, name in ipairs(forbidden) do
+        assert(_G[name] == nil, "global " .. name .. " must remain nil during tick")
+    end
+    assert(Game.time >= 1, "Game.time passed to loop")
+    Memory.checked = true
+end
+`),
+		},
+	}
+
+	vm := NewBotVM("Pure", uid)
+	defer vm.Close()
+	if err := vm.LoadFS(fsys, "bot"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if err := vm.RunTick(w); err != nil {
+		t.Fatalf("RunTick: %v", err)
+	}
+	mem := vm.ExportMemory()
+	if mem["checked"] != true {
+		t.Fatalf("expected Memory.checked == true, got %#v", mem)
 	}
 }
 
@@ -189,7 +263,7 @@ assert(not ok1, "path traversal must fail")
 local ok2 = pcall(require, "/etc/passwd")
 assert(not ok2, "absolute path must fail")
 
-function loop() end
+return { loop = function() end }
 `),
 		},
 		"bot/helper.lua": &fstest.MapFile{
@@ -213,7 +287,7 @@ func TestCPUTimeout(t *testing.T) {
 	fsys := fstest.MapFS{
 		"bot/main.lua": &fstest.MapFile{
 			Data: []byte(`
-function loop()
+return function()
     while true do end
 end
 `),
@@ -253,11 +327,15 @@ func TestDiskHotReload(t *testing.T) {
 		t.Fatalf("write greeting.lua: %v", err)
 	}
 	if err := os.WriteFile(mainPath, []byte(`
+local screeps <const> = require("screeps")
 local g = require("greeting")
-function loop()
-    Memory.persisted = Memory.persisted or 42
-    print("ver=" .. g .. " mem=" .. tostring(Memory.persisted))
-end
+return {
+    loop = function(_, Memory)
+        assert(Memory == screeps.Memory, "Memory preserved across reload")
+        Memory.persisted = Memory.persisted or 42
+        print("ver=" .. g .. " mem=" .. tostring(Memory.persisted))
+    end
+}
 `), 0o644); err != nil {
 		t.Fatalf("write main.lua: %v", err)
 	}

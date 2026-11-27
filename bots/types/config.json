@@ -1,11 +1,7 @@
 {
   "name": "go-screeps",
   "words": [
-    "Game%.rooms",
-    "Game%.creeps",
-    "FIND_MY_CREEPS",
-    "STRUCTURE_SPAWN",
-    "PathFinder%.search"
+    "require%s*%(?%s*[\"']screeps[\"']"
   ],
   "settings": {
     "Lua.runtime.version": "Lua 5.4"

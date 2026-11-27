@@ -44,6 +44,10 @@ type BotVM struct {
 	LastCPU   time.Duration
 	LastError string
 
+	// Built-in screeps module table and bot tick entrypoint.
+	screepsMod *rt.Table
+	loopFn     rt.Callable
+
 	// Source loader configuration (either embedded FS or local directory).
 	fsys          fs.FS
 	subdir        string
@@ -77,7 +81,7 @@ type BotVM struct {
 	maxLogs int
 }
 
-// NewBotVM creates a sandboxed Lua 5.4 VM for username/userID with Screeps globals and persistent Memory.
+// NewBotVM creates a sandboxed Lua 5.4 VM for username/userID with the built-in require("screeps") module.
 func NewBotVM(username, userID string) *BotVM {
 	r := rt.New(io.Discard)
 
@@ -113,23 +117,12 @@ func NewBotVM(username, userID string) *BotVM {
 		maxLogs:       defaultMaxLogs,
 	}
 
-	// Install sandboxed print and console.log.
+	// Install sandboxed print() and require(). No Screeps platform globals are placed in _G.
 	printFn := vm.newGoFunc("print", vm.luaPrint, 0, true)
 	env.Set(rt.StringValue("print"), rt.FunctionValue(printFn))
-	consoleTbl := rt.NewTable()
-	consoleTbl.Set(rt.StringValue("log"), rt.FunctionValue(printFn))
-	env.Set(rt.StringValue("console"), rt.TableValue(consoleTbl))
-
-	// Install sandboxed require().
 	env.Set(rt.StringValue("require"), rt.FunctionValue(vm.newGoFunc("require", vm.luaRequire, 1, false)))
 
-	// Initialize persistent Memory table.
-	mem := rt.NewTable()
-	mem.Set(rt.StringValue("creeps"), rt.TableValue(rt.NewTable()))
-	mem.Set(rt.StringValue("rooms"), rt.TableValue(rt.NewTable()))
-	env.Set(rt.StringValue("Memory"), rt.TableValue(mem))
-
-	// Register Screeps constants, metatables, and PathFinder.
+	// Build the built-in require("screeps") module and reusable metatables.
 	vm.initAPI()
 
 	return vm
@@ -210,7 +203,7 @@ func (vm *BotVM) luaPrint(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	return c.Next(), nil
 }
 
-// RunTick executes one tick of the bot's global loop() function against world.
+// RunTick executes one tick of the bot's exported loop(Game, Memory) function against world.
 // Enforces CPULimit via golua's native RuntimeContext HardLimits.Millis and checks disk hot-reload if configured.
 func (vm *BotVM) RunTick(world *engine.World) error {
 	if vm.R == nil {
@@ -230,12 +223,14 @@ func (vm *BotVM) RunTick(world *engine.World) error {
 	vm.tickStart = time.Now()
 	vm.refreshGame(world)
 
-	loopFn := vm.R.GlobalEnv().Get(rt.StringValue("loop"))
-	if loopFn.Type() != rt.FunctionType {
+	if vm.loopFn == nil {
 		vm.LastCPU = time.Since(vm.tickStart)
 		vm.LastError = ""
 		return nil
 	}
+
+	gameVal := tblGet(vm.screepsMod, "Game")
+	memVal := tblGet(vm.screepsMod, "Memory")
 
 	limit := vm.CPULimit
 	if limit <= 0 {
@@ -251,7 +246,7 @@ func (vm *BotVM) RunTick(world *engine.World) error {
 			Millis: limitMs,
 		},
 	}, func() error {
-		_, callErr := rt.Call1(vm.R.MainThread(), loopFn)
+		_, callErr := rt.Call1(vm.R.MainThread(), rt.FunctionValue(vm.loopFn), gameVal, memVal)
 		return callErr
 	})
 	vm.LastCPU = time.Since(vm.tickStart)

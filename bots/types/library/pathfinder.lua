@@ -40,9 +40,9 @@ function CostMatrix:clone() end
 ---@field cost integer
 ---@field incomplete boolean
 
----@class PathFinderGlobal
+---@class PathFinderAPI
 ---@field CostMatrix { new: fun(): PathFinderCostMatrix }|fun(): PathFinderCostMatrix
-PathFinder = {}
+local PathFinder = {}
 
 ---Compute an optimal path from origin to goal (or list of goals) using Go-native A*.
 ---@param origin RoomPosition|PosLike

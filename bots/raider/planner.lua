@@ -3,6 +3,13 @@
 -- defensive tower(s) + ramparts at RCL 3+, and storage at RCL 4+.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
+local screeps <const> = require("screeps")
+local OK <const> = screeps.OK
+local TERRAIN <const> = screeps.TERRAIN
+local FIND <const> = screeps.FIND
+local STRUCTURE <const> = screeps.STRUCTURE
+local PathFinder <const> = screeps.PathFinder
+
 ---@class RaiderPlanner
 local M = {}
 
@@ -42,14 +49,14 @@ local function getRoomMemory(room)
     if not room then
         return nil
     end
-    if Memory and room.name then
-        if not Memory.rooms then
-            Memory.rooms = {}
+    if screeps.Memory and room.name then
+        if not screeps.Memory.rooms then
+            screeps.Memory.rooms = {}
         end
-        if not Memory.rooms[room.name] then
-            Memory.rooms[room.name] = room.memory or {}
+        if not screeps.Memory.rooms[room.name] then
+            screeps.Memory.rooms[room.name] = room.memory or {}
         end
-        return Memory.rooms[room.name]
+        return screeps.Memory.rooms[room.name]
     end
     return room.memory
 end
@@ -62,14 +69,14 @@ local function isWalkable(terrain, x, y)
         return true
     end
     local t = terrain:get(x, y)
-    return t ~= (TERRAIN_MASK_WALL or 1)
+    return t ~= (TERRAIN.WALL or 1)
 end
 
 function M.getPrimarySpawn(room)
     if not room or not room.find then
         return nil
     end
-    local spawns = room:find(FIND_MY_SPAWNS)
+    local spawns = room:find(FIND.MY_SPAWNS)
     if spawns and #spawns > 0 then
         return spawns[1]
     end
@@ -81,10 +88,10 @@ function M.getSourceContainers(room)
     if not room or not room.find then
         return containers
     end
-    local sources = room:find(FIND_SOURCES) or {}
-    local structs = room:find(FIND_STRUCTURES) or {}
+    local sources = room:find(FIND.SOURCES) or {}
+    local structs = room:find(FIND.STRUCTURES) or {}
     for _, s in ipairs(structs) do
-        if s.structureType == STRUCTURE_CONTAINER and s.pos then
+        if s.structureType == STRUCTURE.CONTAINER and s.pos then
             for _, src in ipairs(sources) do
                 if src.pos and src.pos:getRangeTo(s) <= 2 then
                     table.insert(containers, s)
@@ -100,7 +107,7 @@ local function buildOccupancyMap(room)
     local occ = {}
     local counts = {}
 
-    local structs = room:find(FIND_STRUCTURES) or {}
+    local structs = room:find(FIND.STRUCTURES) or {}
     for _, s in ipairs(structs) do
         if s.pos then
             local k = tileKey(s.pos.x, s.pos.y)
@@ -112,7 +119,7 @@ local function buildOccupancyMap(room)
         end
     end
 
-    local sites = room:find(FIND_CONSTRUCTION_SITES) or {}
+    local sites = room:find(FIND.CONSTRUCTION_SITES) or {}
     local activeSites = 0
     for _, site in ipairs(sites) do
         activeSites = activeSites + 1
@@ -135,9 +142,9 @@ local function hasBlockingStructure(occ, x, y, allowRoad)
         return false
     end
     for stype, _ in pairs(cell) do
-        if stype == STRUCTURE_RAMPART then
+        if stype == STRUCTURE.RAMPART then
             -- Ramparts can coexist with other structures.
-        elseif allowRoad and stype == STRUCTURE_ROAD then
+        elseif allowRoad and stype == STRUCTURE.ROAD then
             -- Roads can share a tile with containers if needed.
         else
             return true
@@ -161,11 +168,11 @@ local function tryPlace(room, occ, counts, activeSites, x, y, stype, allowRoad)
     if hasStructureType(occ, x, y, stype) then
         return activeSites, false
     end
-    if stype ~= STRUCTURE_RAMPART and stype ~= STRUCTURE_ROAD then
+    if stype ~= STRUCTURE.RAMPART and stype ~= STRUCTURE.ROAD then
         if hasBlockingStructure(occ, x, y, allowRoad) then
             return activeSites, false
         end
-    elseif stype == STRUCTURE_ROAD then
+    elseif stype == STRUCTURE.ROAD then
         if hasBlockingStructure(occ, x, y, true) then
             return activeSites, false
         end
@@ -271,7 +278,7 @@ local function ensurePlan(room, spawn)
 
     local terrain = room:getTerrain()
     local sx, sy = spawn.pos.x, spawn.pos.y
-    local sources = room:find(FIND_SOURCES) or {}
+    local sources = room:find(FIND.SOURCES) or {}
 
     plan = {
         spawnX = sx,
@@ -418,51 +425,51 @@ function M.planRoom(room, rcl)
 
     -- Priority 1: Tower at RCL 3+ (critical for aggressive colony defense).
     local towerLimit = TOWER_LIMITS[rcl] or 0
-    if towerLimit > 0 and (counts[STRUCTURE_TOWER] or 0) < towerLimit then
+    if towerLimit > 0 and (counts[STRUCTURE.TOWER] or 0) < towerLimit then
         for _, pt in ipairs(plan.towers) do
-            if (counts[STRUCTURE_TOWER] or 0) >= towerLimit or activeSites >= MAX_ACTIVE_SITES then
+            if (counts[STRUCTURE.TOWER] or 0) >= towerLimit or activeSites >= MAX_ACTIVE_SITES then
                 break
             end
-            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE_TOWER, true)
+            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE.TOWER, true)
         end
     end
 
     -- Priority 2: Checkerboard extensions at RCL 2+ (rapid energy capacity ramp to 550 / 800+).
     local extLimit = EXTENSION_LIMITS[rcl] or 0
-    if extLimit > 0 and (counts[STRUCTURE_EXTENSION] or 0) < extLimit then
+    if extLimit > 0 and (counts[STRUCTURE.EXTENSION] or 0) < extLimit then
         for _, pt in ipairs(plan.extensions) do
-            if (counts[STRUCTURE_EXTENSION] or 0) >= extLimit or activeSites >= MAX_ACTIVE_SITES then
+            if (counts[STRUCTURE.EXTENSION] or 0) >= extLimit or activeSites >= MAX_ACTIVE_SITES then
                 break
             end
-            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE_EXTENSION, true)
+            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE.EXTENSION, true)
         end
     end
 
     -- Priority 3: Source containers (up to 2, built early for fast hauler pipeline).
-    if (counts[STRUCTURE_CONTAINER] or 0) < #plan.containers then
+    if (counts[STRUCTURE.CONTAINER] or 0) < #plan.containers then
         for _, pt in ipairs(plan.containers) do
             if activeSites >= MAX_ACTIVE_SITES then
                 break
             end
-            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE_CONTAINER, true)
+            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE.CONTAINER, true)
         end
     end
 
     -- Priority 4: Storage at RCL 4+.
-    if rcl >= 4 and plan.storage and (counts[STRUCTURE_STORAGE] or 0) < 1 then
-        activeSites = tryPlace(room, occ, counts, activeSites, plan.storage.x, plan.storage.y, STRUCTURE_STORAGE, true)
+    if rcl >= 4 and plan.storage and (counts[STRUCTURE.STORAGE] or 0) < 1 then
+        activeSites = tryPlace(room, occ, counts, activeSites, plan.storage.x, plan.storage.y, STRUCTURE.STORAGE, true)
     end
 
     -- Priority 5: Ramparts on primary spawn and built towers at RCL 3+.
     if rcl >= 3 and activeSites < MAX_ACTIVE_SITES then
-        activeSites = tryPlace(room, occ, counts, activeSites, spawn.pos.x, spawn.pos.y, STRUCTURE_RAMPART, true)
-        local myStructs = room:find(FIND_MY_STRUCTURES) or {}
+        activeSites = tryPlace(room, occ, counts, activeSites, spawn.pos.x, spawn.pos.y, STRUCTURE.RAMPART, true)
+        local myStructs = room:find(FIND.MY_STRUCTURES) or {}
         for _, s in ipairs(myStructs) do
             if activeSites >= MAX_ACTIVE_SITES then
                 break
             end
-            if s.structureType == STRUCTURE_TOWER and s.pos then
-                activeSites = tryPlace(room, occ, counts, activeSites, s.pos.x, s.pos.y, STRUCTURE_RAMPART, true)
+            if s.structureType == STRUCTURE.TOWER and s.pos then
+                activeSites = tryPlace(room, occ, counts, activeSites, s.pos.x, s.pos.y, STRUCTURE.RAMPART, true)
             end
         end
     end
@@ -473,7 +480,7 @@ function M.planRoom(room, rcl)
             if activeSites >= MAX_ACTIVE_SITES then
                 break
             end
-            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE_ROAD, true)
+            activeSites = tryPlace(room, occ, counts, activeSites, pt.x, pt.y, STRUCTURE.ROAD, true)
         end
     end
 end
@@ -499,20 +506,20 @@ function M.drawPlanVisuals(room)
             return
         end
         local k = fastKey(pos.x, pos.y)
-        if stype == STRUCTURE_ROAD then
+        if stype == STRUCTURE.ROAD then
             hasRoad[k] = true
-        elseif stype == STRUCTURE_RAMPART then
+        elseif stype == STRUCTURE.RAMPART then
             hasRampart[k] = true
         else
             solid[k] = true
         end
     end
 
-    local structs = room:find(FIND_STRUCTURES) or {}
+    local structs = room:find(FIND.STRUCTURES) or {}
     for _, s in ipairs(structs) do
         markOccupied(s.pos, s.structureType)
     end
-    local sites = room:find(FIND_CONSTRUCTION_SITES) or {}
+    local sites = room:find(FIND.CONSTRUCTION_SITES) or {}
     for _, s in ipairs(sites) do
         markOccupied(s.pos, s.structureType)
     end

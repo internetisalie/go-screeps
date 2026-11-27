@@ -2,22 +2,31 @@
 -- Roles: defender, scout, brawler, skirmisher, medic.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
+local screeps <const> = require("screeps")
+local OK <const> = screeps.OK
+local ERR <const> = screeps.ERR
+local TERRAIN <const> = screeps.TERRAIN
+local FIND <const> = screeps.FIND
+local PART <const> = screeps.PART
+local RESOURCE <const> = screeps.RESOURCE
+local STRUCTURE <const> = screeps.STRUCTURE
+
 ---@class RaiderCombat
 local M = {}
 
 ---@type table<integer, FindConstant>
 local EXIT_DIRS <const> = {
-    [1] = FIND_EXIT_TOP,
-    [3] = FIND_EXIT_RIGHT,
-    [5] = FIND_EXIT_BOTTOM,
-    [7] = FIND_EXIT_LEFT,
+    [1] = FIND.EXIT_TOP,
+    [3] = FIND.EXIT_RIGHT,
+    [5] = FIND.EXIT_BOTTOM,
+    [7] = FIND.EXIT_LEFT,
 }
 
 local function getUsedEnergy(store)
     if not store or not store.getUsedCapacity then
         return 0
     end
-    return store:getUsedCapacity(RESOURCE_ENERGY) or 0
+    return store:getUsedCapacity(RESOURCE.ENERGY) or 0
 end
 
 local function hasPart(creep, partType)
@@ -94,7 +103,7 @@ local function stepAwayFrom(creep, threatPos)
                 if nx >= 2 and nx <= 47 and ny >= 2 and ny <= 47 then
                     local walkable = true
                     if terrain and terrain.get then
-                        walkable = (terrain:get(nx, ny) ~= (TERRAIN_MASK_WALL or 1))
+                        walkable = (terrain:get(nx, ny) ~= (TERRAIN.WALL or 1))
                     end
                     if walkable then
                         local d = math.max(math.abs(nx - threatPos.x), math.abs(ny - threatPos.y))
@@ -122,11 +131,11 @@ function M.buildDefenderBody(budget)
         return nil
     end
     if budget >= 550 then
-        return { TOUGH, TOUGH, ATTACK, ATTACK, RANGED_ATTACK, MOVE, MOVE, MOVE, MOVE } -- 530
+        return { PART.TOUGH, PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.RANGED_ATTACK, PART.MOVE, PART.MOVE, PART.MOVE, PART.MOVE } -- 530
     elseif budget >= 300 then
-        return { TOUGH, TOUGH, ATTACK, ATTACK, MOVE, MOVE } -- 280
+        return { PART.TOUGH, PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE } -- 280
     end
-    return { TOUGH, ATTACK, MOVE, MOVE } -- 190
+    return { PART.TOUGH, PART.ATTACK, PART.MOVE, PART.MOVE } -- 190
 end
 
 -- Frontline melee brawler: TOUGH + ATTACK + 1:1 MOVE for relentless pursuit.
@@ -136,9 +145,9 @@ function M.buildBrawlerBody(budget)
     end
     if budget < 400 then
         if budget >= 280 then
-            return { TOUGH, TOUGH, ATTACK, ATTACK, MOVE, MOVE } -- 280
+            return { PART.TOUGH, PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE } -- 280
         end
-        return { ATTACK, ATTACK, MOVE, MOVE } -- 260
+        return { PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE } -- 260
     end
 
     local body = {}
@@ -147,14 +156,14 @@ function M.buildBrawlerBody(budget)
     local toughCount = math.min(4, budget // 250)
     for _ = 1, toughCount do
         if cost + 60 <= budget then
-            table.insert(body, TOUGH)
+            table.insert(body, PART.TOUGH)
             cost = cost + 10
         end
     end
 
     local attackCount = 0
     while cost + 130 <= budget and (#body + attackCount + 2) <= 24 do
-        table.insert(body, ATTACK)
+        table.insert(body, PART.ATTACK)
         cost = cost + 80
         attackCount = attackCount + 1
         -- Reserve 50 for paired MOVE.
@@ -165,7 +174,7 @@ function M.buildBrawlerBody(budget)
     local moveCount = math.min(24 - #body, math.max(attackCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
-            table.insert(body, MOVE)
+            table.insert(body, PART.MOVE)
             cost = cost + 50
         end
     end
@@ -179,29 +188,29 @@ function M.buildSkirmisherBody(budget)
     end
     if budget < 400 then
         if budget >= 260 then
-            return { TOUGH, RANGED_ATTACK, MOVE, MOVE } -- 260
+            return { PART.TOUGH, PART.RANGED_ATTACK, PART.MOVE, PART.MOVE } -- 260
         end
-        return { RANGED_ATTACK, MOVE, MOVE } -- 250
+        return { PART.RANGED_ATTACK, PART.MOVE, PART.MOVE } -- 250
     end
 
     local body = {}
     local cost = 0
     local rangedCount = 0
     while cost + 200 <= budget and (#body + rangedCount + 2) <= 22 do
-        table.insert(body, RANGED_ATTACK)
+        table.insert(body, PART.RANGED_ATTACK)
         cost = cost + 150
         rangedCount = rangedCount + 1
         cost = cost + 50 -- reserve paired MOVE
     end
     cost = cost - (rangedCount * 50)
     if cost + 60 <= budget and #body + rangedCount + 2 <= 22 then
-        table.insert(body, 1, TOUGH)
+        table.insert(body, 1, PART.TOUGH)
         cost = cost + 10
     end
     local moveCount = math.min(22 - #body, math.max(rangedCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
-            table.insert(body, MOVE)
+            table.insert(body, PART.MOVE)
             cost = cost + 50
         end
     end
@@ -217,19 +226,19 @@ function M.buildMedicBody(budget)
     local cost = 0
     local healCount = 0
     while cost + 300 <= budget and (#body + healCount + 2) <= 20 do
-        table.insert(body, HEAL)
+        table.insert(body, PART.HEAL)
         cost = cost + 250
         healCount = healCount + 1
         cost = cost + 50 -- reserve paired MOVE
     end
     cost = cost - (healCount * 50)
     if healCount == 0 then
-        return { HEAL, MOVE }
+        return { PART.HEAL, PART.MOVE }
     end
     local moveCount = math.min(20 - #body, math.max(healCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
-            table.insert(body, MOVE)
+            table.insert(body, PART.MOVE)
             cost = cost + 50
         end
     end
@@ -239,29 +248,29 @@ end
 -- --- Threat Assessment & Home Towers ---
 
 function M.assessThreat(room)
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     local threatLevel = 0
     for _, h in ipairs(hostiles) do
         threatLevel = threatLevel + 1
-        threatLevel = threatLevel + countPart(h, ATTACK) * 2
-        threatLevel = threatLevel + countPart(h, RANGED_ATTACK) * 2
-        threatLevel = threatLevel + countPart(h, HEAL) * 3
+        threatLevel = threatLevel + countPart(h, PART.ATTACK) * 2
+        threatLevel = threatLevel + countPart(h, PART.RANGED_ATTACK) * 2
+        threatLevel = threatLevel + countPart(h, PART.HEAL) * 3
     end
     if room.memory then
         room.memory.threat = {
             level = threatLevel,
             count = #hostiles,
-            tick = Game.time or 0,
+            tick = screeps.Game.time or 0,
         }
     end
     return threatLevel, hostiles
 end
 
 function M.runTowers(room, hostiles)
-    local myStructs = room:find(FIND_MY_STRUCTURES) or {}
+    local myStructs = room:find(FIND.MY_STRUCTURES) or {}
     local towers = {}
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCTURE_TOWER and getUsedEnergy(s.store) >= 10 then
+        if s.structureType == STRUCTURE.TOWER and getUsedEnergy(s.store) >= 10 then
             table.insert(towers, s)
         end
     end
@@ -269,8 +278,8 @@ function M.runTowers(room, hostiles)
         return
     end
 
-    hostiles = hostiles or room:find(FIND_HOSTILE_CREEPS) or {}
-    local myCreeps = room:find(FIND_MY_CREEPS) or {}
+    hostiles = hostiles or room:find(FIND.HOSTILE_CREEPS) or {}
+    local myCreeps = room:find(FIND.MY_CREEPS) or {}
     local wounded = nil
     local lowestRatio = 1.0
     for _, c in ipairs(myCreeps) do
@@ -304,15 +313,15 @@ function M.runTowers(room, hostiles)
             end
         elseif getUsedEnergy(tower.store) > 500 then
             -- Maintain critical ramparts and structures when energy is plentiful.
-            local structs = room:find(FIND_STRUCTURES) or {}
+            local structs = room:find(FIND.STRUCTURES) or {}
             local repairTarget = nil
             local bestHits = 9999999
             for _, s in ipairs(structs) do
                 if s.hits and s.hitsMax and s.hitsMax > 0 then
-                    if s.structureType == STRUCTURE_RAMPART and s.hits < 3000 and s.hits < bestHits then
+                    if s.structureType == STRUCTURE.RAMPART and s.hits < 3000 and s.hits < bestHits then
                         bestHits = s.hits
                         repairTarget = s
-                    elseif (s.structureType == STRUCTURE_CONTAINER or s.structureType == STRUCTURE_ROAD) and s.hits < s.hitsMax * 0.5 and s.hits < bestHits then
+                    elseif (s.structureType == STRUCTURE.CONTAINER or s.structureType == STRUCTURE.ROAD) and s.hits < s.hitsMax * 0.5 and s.hits < bestHits then
                         bestHits = s.hits
                         repairTarget = s
                     end
@@ -334,8 +343,8 @@ function M.getAdjacentRooms(room)
         return result
     end
 
-    if Game.map and Game.map.describeExits then
-        local exits = Game.map.describeExits(room.name)
+    if screeps.Game.map and screeps.Game.map.describeExits then
+        local exits = screeps.Game.map.describeExits(room.name)
         if type(exits) == "table" then
             for k, adjName in pairs(exits) do
                 local dirNum = tonumber(k)
@@ -352,10 +361,10 @@ function M.getAdjacentRooms(room)
 
     -- Fallback when Game.map.describeExits is unavailable: check which exit directions have tiles.
     local orderedDirs = {
-        FIND_EXIT_TOP or 1,
-        FIND_EXIT_RIGHT or 3,
-        FIND_EXIT_BOTTOM or 5,
-        FIND_EXIT_LEFT or 7,
+        FIND.EXIT_TOP or 1,
+        FIND.EXIT_RIGHT or 3,
+        FIND.EXIT_BOTTOM or 5,
+        FIND.EXIT_LEFT or 7,
     }
     for _, dir in ipairs(orderedDirs) do
         local tiles = room:find(dir)
@@ -379,8 +388,8 @@ local function resolveExitDir(room, targetRoom)
         end
     end
 
-    if Game.map and Game.map.describeExits then
-        local exits = Game.map.describeExits(room.name)
+    if screeps.Game.map and screeps.Game.map.describeExits then
+        local exits = screeps.Game.map.describeExits(room.name)
         if type(exits) == "table" then
             for k, adjName in pairs(exits) do
                 if adjName == targetRoom then
@@ -445,13 +454,13 @@ function M.updateIntel(room)
     if not room or not room.name then
         return
     end
-    if not Memory.scoutedRooms then
-        Memory.scoutedRooms = {}
+    if not screeps.Memory.scoutedRooms then
+        screeps.Memory.scoutedRooms = {}
     end
 
-    local hostileSpawns = room:find(FIND_HOSTILE_SPAWNS) or {}
-    local hostileCreeps = room:find(FIND_HOSTILE_CREEPS) or {}
-    local hostileStructs = room:find(FIND_HOSTILE_STRUCTURES) or {}
+    local hostileSpawns = room:find(FIND.HOSTILE_SPAWNS) or {}
+    local hostileCreeps = room:find(FIND.HOSTILE_CREEPS) or {}
+    local hostileStructs = room:find(FIND.HOSTILE_STRUCTURES) or {}
     local ctrl = room.controller
 
     local hostileCtrl = false
@@ -466,8 +475,8 @@ function M.updateIntel(room)
         score = score + 50
     end
 
-    Memory.scoutedRooms[room.name] = {
-        lastSeen = Game.time or 0,
+    screeps.Memory.scoutedRooms[room.name] = {
+        lastSeen = screeps.Game.time or 0,
         score = score,
         hasSpawn = (#hostileSpawns > 0),
         hasHostiles = (score > 0),
@@ -478,7 +487,7 @@ function M.updateIntel(room)
     -- Select the highest-priority discovered enemy room as Memory.raidTarget.
     local bestRoom = nil
     local bestScore = 0
-    for rName, info in pairs(Memory.scoutedRooms) do
+    for rName, info in pairs(screeps.Memory.scoutedRooms) do
         if info and info.hasHostiles and (info.score or 0) > bestScore then
             bestScore = info.score
             bestRoom = rName
@@ -486,9 +495,9 @@ function M.updateIntel(room)
     end
 
     if bestRoom then
-        Memory.raidTarget = bestRoom
-    elseif Memory.raidTarget == room.name and score == 0 then
-        Memory.raidTarget = nil
+        screeps.Memory.raidTarget = bestRoom
+    elseif screeps.Memory.raidTarget == room.name and score == 0 then
+        screeps.Memory.raidTarget = nil
     end
 end
 
@@ -501,15 +510,15 @@ function M.pickNextScoutTarget(homeRoom)
     if #adj == 0 then
         return nil, nil
     end
-    if not Memory.scoutedRooms then
-        Memory.scoutedRooms = {}
+    if not screeps.Memory.scoutedRooms then
+        screeps.Memory.scoutedRooms = {}
     end
 
     local best = nil
-    local oldestTick = (Game.time or 0) + 1
+    local oldestTick = (screeps.Game.time or 0) + 1
     for _, entry in ipairs(adj) do
         if entry.roomName then
-            local info = Memory.scoutedRooms[entry.roomName]
+            local info = screeps.Memory.scoutedRooms[entry.roomName]
             local seen = (info and info.lastSeen) or -9999
             if seen < oldestTick then
                 oldestTick = seen
@@ -537,18 +546,18 @@ local function runDefender(creep)
         return
     end
 
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local target = creep.pos:findClosestByRange(hostiles) or hostiles[1]
         local dist = creep.pos:getRangeTo(target)
-        local hasMelee = hasPart(creep, ATTACK)
-        local hasRanged = hasPart(creep, RANGED_ATTACK)
+        local hasMelee = hasPart(creep, PART.ATTACK)
+        local hasRanged = hasPart(creep, PART.RANGED_ATTACK)
 
         if hasRanged and dist <= 3 then
             creep:rangedAttack(target)
         end
         if hasMelee then
-            if creep:attack(target) == ERR_NOT_IN_RANGE then
+            if creep:attack(target) == ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
             end
         elseif hasRanged then
@@ -562,8 +571,8 @@ local function runDefender(creep)
     end
 
     -- Patrol near raid exit or spawn when peaceful.
-    if Memory.raidTarget then
-        local exitDir = resolveExitDir(room, Memory.raidTarget)
+    if screeps.Memory.raidTarget then
+        local exitDir = resolveExitDir(room, screeps.Memory.raidTarget)
         if exitDir then
             local rx, ry = getRallyPoint(room, exitDir)
             if creep.pos:getRangeTo(rx, ry) > 2 then
@@ -573,7 +582,7 @@ local function runDefender(creep)
         end
     end
 
-    local spawns = room:find(FIND_MY_SPAWNS) or {}
+    local spawns = room:find(FIND.MY_SPAWNS) or {}
     if #spawns > 0 and creep.pos:getRangeTo(spawns[1]) > 4 then
         creep:moveTo(spawns[1], { range = 3 })
     end
@@ -606,7 +615,7 @@ local function runScout(creep)
         return
     end
 
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local nearest = creep.pos:findClosestByRange(hostiles)
         if nearest and creep.pos:getRangeTo(nearest) <= 5 then
@@ -632,20 +641,20 @@ end
 -- Choose a shared squad focus-fire target in a raid room (computed once per tick so all raiders focus-fire!).
 local function selectRaidTarget(creep)
     local room = creep.room
-    local now = Game.time or 0
+    local now = screeps.Game.time or 0
 
     -- Reuse shared squad focus target if still alive in this room on the same tick.
-    if Memory.raidFocusTick == now and Memory.raidFocusRoom == room.name and Memory.raidFocusId then
-        local cached = Game.getObjectById and Game.getObjectById(Memory.raidFocusId)
+    if screeps.Memory.raidFocusTick == now and screeps.Memory.raidFocusRoom == room.name and screeps.Memory.raidFocusId then
+        local cached = screeps.Game.getObjectById and screeps.Game.getObjectById(screeps.Memory.raidFocusId)
         if cached and cached.room and cached.room.name == room.name then
-            return cached, Memory.raidFocusKind or "creep"
+            return cached, screeps.Memory.raidFocusKind or "creep"
         end
     end
 
     local chosen, kind = nil, nil
 
     -- 1. Hostile combat creeps & healers first (kill enemy healers & defenders together!).
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local best = nil
         local bestScore = math.mininteger
@@ -653,9 +662,9 @@ local function selectRaidTarget(creep)
             local d = creep.pos:getRangeTo(h)
             local hpFrac = (h.hits and h.hitsMax and h.hitsMax > 0) and (h.hits / h.hitsMax) or 1
             local s = 100 - (d * 2) + (1 - hpFrac) * 45
-            if hasPart(h, HEAL) then
+            if hasPart(h, PART.HEAL) then
                 s = s + 65
-            elseif hasPart(h, ATTACK) or hasPart(h, RANGED_ATTACK) then
+            elseif hasPart(h, PART.ATTACK) or hasPart(h, PART.RANGED_ATTACK) then
                 s = s + 40
             end
             if s > bestScore then
@@ -670,14 +679,14 @@ local function selectRaidTarget(creep)
 
     -- 2. Hostile towers (disable room defense!), then spawns, then other structures.
     if not chosen then
-        local hStructs = room:find(FIND_HOSTILE_STRUCTURES) or {}
+        local hStructs = room:find(FIND.HOSTILE_STRUCTURES) or {}
         local towers, spawns, others = {}, {}, {}
         for _, s in ipairs(hStructs) do
-            if s.structureType == STRUCTURE_TOWER then
+            if s.structureType == STRUCTURE.TOWER then
                 table.insert(towers, s)
-            elseif s.structureType == STRUCTURE_SPAWN then
+            elseif s.structureType == STRUCTURE.SPAWN then
                 table.insert(spawns, s)
-            elseif s.structureType ~= STRUCTURE_CONTROLLER then
+            elseif s.structureType ~= STRUCTURE.CONTROLLER then
                 table.insert(others, s)
             end
         end
@@ -691,18 +700,18 @@ local function selectRaidTarget(creep)
     end
 
     -- 3. Hostile construction sites (stomp them!).
-    if not chosen and FIND_HOSTILE_CONSTRUCTION_SITES then
-        local hSites = room:find(FIND_HOSTILE_CONSTRUCTION_SITES) or {}
+    if not chosen and FIND.HOSTILE_CONSTRUCTION_SITES then
+        local hSites = room:find(FIND.HOSTILE_CONSTRUCTION_SITES) or {}
         if #hSites > 0 then
             chosen, kind = creep.pos:findClosestByRange(hSites) or hSites[1], "site"
         end
     end
 
     if chosen and chosen.id then
-        Memory.raidFocusTick = now
-        Memory.raidFocusRoom = room.name
-        Memory.raidFocusId = chosen.id
-        Memory.raidFocusKind = kind
+        screeps.Memory.raidFocusTick = now
+        screeps.Memory.raidFocusRoom = room.name
+        screeps.Memory.raidFocusId = chosen.id
+        screeps.Memory.raidFocusKind = kind
     end
     return chosen, kind
 end
@@ -711,7 +720,7 @@ end
 local function inspectStagingSquad(room)
     local staged = {}
     local hasMedic = false
-    local myCreeps = room:find(FIND_MY_CREEPS) or {}
+    local myCreeps = room:find(FIND.MY_CREEPS) or {}
     for _, c in ipairs(myCreeps) do
         if c.memory then
             local r = c.memory.role
@@ -733,17 +742,17 @@ local function handleRaidTransit(creep)
     local homeRoom = creep.memory.homeRoom or room.name
     creep.memory.homeRoom = homeRoom
 
-    local targetRoom = Memory.raidTarget or creep.memory.targetRoom
+    local targetRoom = screeps.Memory.raidTarget or creep.memory.targetRoom
     if not targetRoom then
         if room.name ~= homeRoom then
             moveAcrossExit(creep, homeRoom, nil)
             return false
         end
-        local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+        local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
         if #hostiles > 0 then
             return true
         end
-        local spawns = room:find(FIND_MY_SPAWNS) or {}
+        local spawns = room:find(FIND.MY_SPAWNS) or {}
         if #spawns > 0 and creep.pos:getRangeTo(spawns[1]) > 5 then
             creep:moveTo(spawns[1], { range = 4 })
         end
@@ -764,7 +773,7 @@ local function handleRaidTransit(creep)
 
     -- In home room: fight intruders immediately if home is under attack!
     if room.name == homeRoom then
-        local homeHostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+        local homeHostiles = room:find(FIND.HOSTILE_CREEPS) or {}
         if #homeHostiles > 0 then
             return true
         end
@@ -782,10 +791,10 @@ local function handleRaidTransit(creep)
             local needMedic = (energyCap >= 550)
             local waveTarget = (energyCap >= 800) and 5 or ((energyCap >= 550) and 4 or 3)
 
-            if Memory.raidGatherStart == nil or #staged == 0 then
-                Memory.raidGatherStart = Game.time or 0
+            if screeps.Memory.raidGatherStart == nil or #staged == 0 then
+                screeps.Memory.raidGatherStart = screeps.Game.time or 0
             end
-            local waited = (Game.time or 0) - (Memory.raidGatherStart or (Game.time or 0))
+            local waited = (screeps.Game.time or 0) - (screeps.Memory.raidGatherStart or (screeps.Game.time or 0))
 
             if room.visual then
                 room.visual:circle(rx, ry, {
@@ -802,7 +811,7 @@ local function handleRaidTransit(creep)
                 for _, member in ipairs(staged) do
                     member.memory.state = "raid"
                 end
-                Memory.raidGatherStart = nil
+                screeps.Memory.raidGatherStart = nil
             else
                 if creep.pos:getRangeTo(rx, ry) > 2 then
                     creep:moveTo(rx, ry)
@@ -835,7 +844,7 @@ local function handleLowHP(creep)
 
     local room = creep.room
     -- If a friendly medic is in the room, pull back toward the medic!
-    local myCreeps = room:find(FIND_MY_CREEPS) or {}
+    local myCreeps = room:find(FIND.MY_CREEPS) or {}
     local medic = nil
     for _, c in ipairs(myCreeps) do
         if c.id ~= creep.id and c.memory and c.memory.role == "medic" then
@@ -845,8 +854,8 @@ local function handleLowHP(creep)
     end
 
     -- Skirmishers still fire while retreating.
-    if hasPart(creep, RANGED_ATTACK) then
-        local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    if hasPart(creep, PART.RANGED_ATTACK) then
+        local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
         if #hostiles > 0 then
             local nearest = creep.pos:findClosestByRange(hostiles)
             if nearest and creep.pos:getRangeTo(nearest) <= 3 then
@@ -867,7 +876,7 @@ local function handleLowHP(creep)
         end
     end
 
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local nearest = creep.pos:findClosestByRange(hostiles)
         if nearest and nearest.pos then
@@ -902,7 +911,7 @@ local function runBrawler(creep)
         return
     end
 
-    if creep:attack(target) == ERR_NOT_IN_RANGE then
+    if creep:attack(target) == ERR.NOT_IN_RANGE then
         creep:moveTo(target)
     end
 end
@@ -935,7 +944,7 @@ local function runSkirmisher(creep)
     end
 
     -- Kite melee hostiles at range 3!
-    if kind == "creep" and hasPart(target, ATTACK) and dist <= 2 then
+    if kind == "creep" and hasPart(target, PART.ATTACK) and dist <= 2 then
         stepAwayFrom(creep, target.pos)
     elseif dist > 3 then
         creep:moveTo(target)
@@ -956,7 +965,7 @@ local function runMedic(creep)
     end
 
     local room = creep.room
-    local myCreeps = room:find(FIND_MY_CREEPS) or {}
+    local myCreeps = room:find(FIND.MY_CREEPS) or {}
 
     -- Find most wounded friendly creep in the room.
     local wounded = nil
@@ -1000,7 +1009,7 @@ local function runMedic(creep)
     end
 
     -- Stay clear of hostiles if solo.
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local nearest = creep.pos:findClosestByRange(hostiles)
         if nearest and creep.pos:getRangeTo(nearest) <= 4 then

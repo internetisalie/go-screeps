@@ -47,6 +47,84 @@ func doLuaString(r *rt.Runtime, name, src string) error {
 	return err
 }
 
+func doLuaStringRet(r *rt.Runtime, name, src string) (rt.Value, error) {
+	clos, err := r.CompileAndLoadLuaChunk(name, []byte(src), rt.TableValue(r.GlobalEnv()))
+	if err != nil {
+		return rt.NilValue, err
+	}
+	return rt.Call1(r.MainThread(), rt.FunctionValue(clos))
+}
+
+func seedMockScreepsModule(t *testing.T, r *rt.Runtime) {
+	t.Helper()
+	src := `
+		local screeps = {
+			OK = 0,
+			ERR = {
+				NOT_OWNER = -1, NO_PATH = -2, NAME_EXISTS = -3, BUSY = -4,
+				NOT_FOUND = -5, NOT_ENOUGH_ENERGY = -6, NOT_ENOUGH_RESOURCES = -6,
+				NOT_ENOUGH_EXTENSIONS = -6, INVALID_TARGET = -7, FULL = -8,
+				NOT_IN_RANGE = -9, INVALID_ARGS = -10, TIRED = -11, NO_BODYPART = -12,
+				RCL_NOT_ENOUGH = -14, GCL_NOT_ENOUGH = -15,
+			},
+			DIR = {
+				TOP = 1, TOP_RIGHT = 2, RIGHT = 3, BOTTOM_RIGHT = 4,
+				BOTTOM = 5, BOTTOM_LEFT = 6, LEFT = 7, TOP_LEFT = 8,
+			},
+			TERRAIN = { PLAIN = 0, WALL = 1, SWAMP = 2 },
+			FIND = {
+				EXIT_TOP = 1, EXIT_RIGHT = 3, EXIT_BOTTOM = 5, EXIT_LEFT = 7, EXIT = 10,
+				CREEPS = 101, MY_CREEPS = 102, HOSTILE_CREEPS = 103,
+				SOURCES_ACTIVE = 104, SOURCES = 105, DROPPED_RESOURCES = 106,
+				STRUCTURES = 107, MY_STRUCTURES = 108, HOSTILE_STRUCTURES = 109,
+				FLAGS = 110, CONSTRUCTION_SITES = 111, MY_SPAWNS = 112,
+				HOSTILE_SPAWNS = 113, MY_CONSTRUCTION_SITES = 114,
+				HOSTILE_CONSTRUCTION_SITES = 115, MINERALS = 116, TOMBSTONES = 118,
+			},
+			PART = {
+				MOVE = "move", WORK = "work", CARRY = "carry", ATTACK = "attack",
+				RANGED_ATTACK = "ranged_attack", TOUGH = "tough", HEAL = "heal", CLAIM = "claim",
+			},
+			COST = {
+				move = 50, work = 100, carry = 50, attack = 80,
+				ranged_attack = 150, tough = 10, heal = 250, claim = 600,
+			},
+			RESOURCE = {
+				ENERGY = "energy", HYDROGEN = "H", OXYGEN = "O", UTRIUM = "U",
+				LEMERGIUM = "L", KEANIUM = "K", ZYNTHIUM = "Z", CATALYST = "X",
+			},
+			STRUCTURE = {
+				SPAWN = "spawn", EXTENSION = "extension", ROAD = "road",
+				WALL = "constructedWall", RAMPART = "rampart", LINK = "link",
+				STORAGE = "storage", TOWER = "tower", CONTAINER = "container",
+				CONTROLLER = "controller", EXTRACTOR = "extractor",
+			},
+			LOOK = {
+				CREEPS = "creep", ENERGY = "energy", RESOURCES = "resource",
+				SOURCES = "source", MINERALS = "mineral", STRUCTURES = "structure",
+				FLAGS = "flag", CONSTRUCTION_SITES = "constructionSite",
+				TERRAIN = "terrain", TOMBSTONES = "tombstone",
+			},
+			CONST = {
+				MAX_CREEP_SIZE = 50, CREEP_LIFE_TIME = 1500, CREEP_CLAIM_LIFE_TIME = 600,
+				CREEP_SPAWN_TIME = 3, CARRY_CAPACITY = 50, HARVEST_POWER = 2,
+				REPAIR_POWER = 100, BUILD_POWER = 5, ATTACK_POWER = 30,
+				UPGRADE_CONTROLLER_POWER = 1, RANGED_ATTACK_POWER = 10,
+				HEAL_POWER = 12, RANGED_HEAL_POWER = 4, SOURCE_ENERGY_CAPACITY = 3000,
+				SPAWN_ENERGY_CAPACITY = 300, STORAGE_CAPACITY = 1000000,
+				CONTAINER_CAPACITY = 2000, LINK_CAPACITY = 800, TOWER_CAPACITY = 1000,
+			},
+			Game = {},
+			Memory = { creeps = {}, rooms = {} },
+			log = function() end,
+		}
+		package.loaded["screeps"] = screeps
+	`
+	if err := doLuaString(r, "mock_screeps", src); err != nil {
+		t.Fatalf("seedMockScreepsModule: %v", err)
+	}
+}
+
 func preloadTable(t *testing.T, r *rt.Runtime) *rt.Table {
 	t.Helper()
 	pkg, ok := r.GlobalEnv().Get(rt.StringValue("package")).TryTable()
@@ -81,43 +159,7 @@ func TestStarterFSEmbed(t *testing.T) {
 func TestStarterLuaCompileAndSmoke(t *testing.T) {
 	r := newTestLuaRuntime(t)
 	env := r.GlobalEnv()
-
-	// Seed Screeps global constants required by the bot modules.
-	constants := map[string]rt.Value{
-		"OK":                      rt.IntValue(0),
-		"ERR_NOT_IN_RANGE":        rt.IntValue(-9),
-		"FIND_SOURCES":            rt.IntValue(105),
-		"FIND_MY_CREEPS":          rt.IntValue(102),
-		"FIND_HOSTILE_CREEPS":     rt.IntValue(103),
-		"FIND_STRUCTURES":         rt.IntValue(107),
-		"FIND_MY_STRUCTURES":      rt.IntValue(108),
-		"FIND_MY_SPAWNS":          rt.IntValue(112),
-		"FIND_CONSTRUCTION_SITES": rt.IntValue(111),
-		"FIND_DROPPED_RESOURCES":  rt.IntValue(106),
-		"FIND_TOMBSTONES":         rt.IntValue(118),
-		"STRUCTURE_SPAWN":         rt.StringValue("spawn"),
-		"STRUCTURE_EXTENSION":     rt.StringValue("extension"),
-		"STRUCTURE_ROAD":          rt.StringValue("road"),
-		"STRUCTURE_TOWER":         rt.StringValue("tower"),
-		"STRUCTURE_CONTAINER":     rt.StringValue("container"),
-		"STRUCTURE_CONTROLLER":    rt.StringValue("controller"),
-		"STRUCTURE_STORAGE":       rt.StringValue("storage"),
-		"STRUCTURE_LINK":          rt.StringValue("link"),
-		"STRUCTURE_RAMPART":       rt.StringValue("rampart"),
-		"STRUCTURE_WALL":          rt.StringValue("constructedWall"),
-		"RESOURCE_ENERGY":         rt.StringValue("energy"),
-		"WORK":                    rt.StringValue("work"),
-		"CARRY":                   rt.StringValue("carry"),
-		"MOVE":                    rt.StringValue("move"),
-		"ATTACK":                  rt.StringValue("attack"),
-		"RANGED_ATTACK":           rt.StringValue("ranged_attack"),
-		"HEAL":                    rt.StringValue("heal"),
-		"TOUGH":                   rt.StringValue("tough"),
-		"CLAIM":                   rt.StringValue("claim"),
-	}
-	for k, v := range constants {
-		env.Set(rt.StringValue(k), v)
-	}
+	seedMockScreepsModule(t, r)
 
 	preload := preloadTable(t, r)
 	modules := []struct {
@@ -146,18 +188,27 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read main.lua: %v", err)
 	}
-	if err := doLuaString(r, "starter/main.lua", string(mainSrc)); err != nil {
+	mainRet, err := doLuaStringRet(r, "starter/main.lua", string(mainSrc))
+	if err != nil {
 		t.Fatalf("load main.lua in golua: %v", err)
 	}
-
-	loopFn := env.Get(rt.StringValue("loop"))
+	mainTbl, ok := mainRet.TryTable()
+	if !ok {
+		t.Fatalf("expected starter/main.lua to return a table, got %s", mainRet.TypeName())
+	}
+	loopFn := mainTbl.Get(rt.StringValue("loop"))
 	if loopFn.Type() != rt.FunctionType {
-		t.Fatalf("expected global loop to be a function, got %s", loopFn.TypeName())
+		t.Fatalf("expected returned loop to be a function, got %s", loopFn.TypeName())
 	}
 
 	// Smoke-test loop() with a mocked room (RCL 5, planner tick, visuals, spawning, towers, links, creeps).
 	mockSetup := `
-		Memory = { creeps = { dead_creep = { role = "harvester" } }, rooms = {} }
+		local screeps = require("screeps")
+		local OK = screeps.OK
+		local FIND = screeps.FIND
+		local STRUCTURE = screeps.STRUCTURE
+
+		screeps.Memory = { creeps = { dead_creep = { role = "harvester" } }, rooms = {} }
 
 		local function makePos(x, y)
 			local p = { x = x, y = y }
@@ -192,7 +243,7 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		local spawn = {
 			id = "spawn1",
 			name = "Spawn1",
-			structureType = STRUCTURE_SPAWN,
+			structureType = STRUCTURE.SPAWN,
 			pos = makePos(25, 25),
 			store = makeStore(300, 300),
 			hits = 5000,
@@ -208,7 +259,7 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		local ctrl = { id = "ctrl1", pos = makePos(35, 25), level = 5, my = true }
 		local tower = {
 			id = "tower1",
-			structureType = STRUCTURE_TOWER,
+			structureType = STRUCTURE.TOWER,
 			pos = makePos(23, 25),
 			store = makeStore(600, 1000),
 			hits = 3000,
@@ -274,15 +325,15 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		}
 
 		function room:find(what)
-			if what == FIND_SOURCES then return { source1 } end
-			if what == FIND_MY_SPAWNS then return { spawn } end
-			if what == FIND_MY_STRUCTURES then return { spawn, tower } end
-			if what == FIND_STRUCTURES then return { spawn, tower } end
-			if what == FIND_MY_CREEPS then return creepsList end
-			if what == FIND_HOSTILE_CREEPS then return {} end
-			if what == FIND_CONSTRUCTION_SITES then return {} end
-			if what == FIND_DROPPED_RESOURCES then return {} end
-			if what == FIND_TOMBSTONES then return {} end
+			if what == FIND.SOURCES then return { source1 } end
+			if what == FIND.MY_SPAWNS then return { spawn } end
+			if what == FIND.MY_STRUCTURES then return { spawn, tower } end
+			if what == FIND.STRUCTURES then return { spawn, tower } end
+			if what == FIND.MY_CREEPS then return creepsList end
+			if what == FIND.HOSTILE_CREEPS then return {} end
+			if what == FIND.CONSTRUCTION_SITES then return {} end
+			if what == FIND.DROPPED_RESOURCES then return {} end
+			if what == FIND.TOMBSTONES then return {} end
 			return {}
 		end
 
@@ -293,7 +344,7 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 			byId[c.id] = c
 		end
 
-		Game = {
+		screeps.Game = {
 			time = 25,
 			rooms = { W1N1 = room },
 			creeps = creepsMap,
@@ -305,12 +356,19 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		t.Fatalf("mock setup failed: %v", err)
 	}
 
-	if _, err := rt.Call1(r.MainThread(), loopFn); err != nil {
+	screepsVal, err := doLuaStringRet(r, "getScreeps", `return require("screeps")`)
+	if err != nil {
+		t.Fatalf("get screeps module: %v", err)
+	}
+	screepsTbl := screepsVal.AsTable()
+	if _, err := rt.Call1(r.MainThread(), loopFn, screepsTbl.Get(rt.StringValue("Game")), screepsTbl.Get(rt.StringValue("Memory"))); err != nil {
 		t.Fatalf("loop() smoke tick failed: %v", err)
 	}
 
 	// Verify dead_creep was cleaned up and planner created construction sites.
 	verify := `
+		local screeps = require("screeps")
+		local Memory, Game = screeps.Memory, screeps.Game
 		assert(Memory.creeps.dead_creep == nil, "dead_creep should be cleaned up")
 		assert(Memory.rooms.W1N1 ~= nil and Memory.rooms.W1N1.threat ~= nil, "threat memory should be populated")
 		assert(Memory.rooms.W1N1.plan ~= nil, "planner memory should be populated")
@@ -411,52 +469,7 @@ func TestRaiderRuns200TicksCleanly(t *testing.T) {
 func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 	r := newTestLuaRuntime(t)
 	env := r.GlobalEnv()
-
-	constants := map[string]rt.Value{
-		"OK":                              rt.IntValue(0),
-		"ERR_NO_PATH":                     rt.IntValue(-2),
-		"ERR_NOT_IN_RANGE":                rt.IntValue(-9),
-		"FIND_EXIT_TOP":                   rt.IntValue(1),
-		"FIND_EXIT_RIGHT":                 rt.IntValue(3),
-		"FIND_EXIT_BOTTOM":                rt.IntValue(5),
-		"FIND_EXIT_LEFT":                  rt.IntValue(7),
-		"FIND_SOURCES":                    rt.IntValue(105),
-		"FIND_SOURCES_ACTIVE":             rt.IntValue(104),
-		"FIND_MY_CREEPS":                  rt.IntValue(102),
-		"FIND_HOSTILE_CREEPS":             rt.IntValue(103),
-		"FIND_STRUCTURES":                 rt.IntValue(107),
-		"FIND_MY_STRUCTURES":              rt.IntValue(108),
-		"FIND_HOSTILE_STRUCTURES":         rt.IntValue(109),
-		"FIND_MY_SPAWNS":                  rt.IntValue(112),
-		"FIND_HOSTILE_SPAWNS":             rt.IntValue(113),
-		"FIND_CONSTRUCTION_SITES":         rt.IntValue(111),
-		"FIND_MY_CONSTRUCTION_SITES":      rt.IntValue(114),
-		"FIND_HOSTILE_CONSTRUCTION_SITES": rt.IntValue(115),
-		"FIND_DROPPED_RESOURCES":          rt.IntValue(106),
-		"FIND_TOMBSTONES":                 rt.IntValue(118),
-		"TERRAIN_MASK_WALL":               rt.IntValue(1),
-		"STRUCTURE_SPAWN":                 rt.StringValue("spawn"),
-		"STRUCTURE_EXTENSION":             rt.StringValue("extension"),
-		"STRUCTURE_ROAD":                  rt.StringValue("road"),
-		"STRUCTURE_TOWER":                 rt.StringValue("tower"),
-		"STRUCTURE_CONTAINER":             rt.StringValue("container"),
-		"STRUCTURE_CONTROLLER":            rt.StringValue("controller"),
-		"STRUCTURE_STORAGE":               rt.StringValue("storage"),
-		"STRUCTURE_RAMPART":               rt.StringValue("rampart"),
-		"STRUCTURE_WALL":                  rt.StringValue("constructedWall"),
-		"RESOURCE_ENERGY":                 rt.StringValue("energy"),
-		"WORK":                            rt.StringValue("work"),
-		"CARRY":                           rt.StringValue("carry"),
-		"MOVE":                            rt.StringValue("move"),
-		"ATTACK":                          rt.StringValue("attack"),
-		"RANGED_ATTACK":                   rt.StringValue("ranged_attack"),
-		"HEAL":                            rt.StringValue("heal"),
-		"TOUGH":                           rt.StringValue("tough"),
-		"CLAIM":                           rt.StringValue("claim"),
-	}
-	for k, v := range constants {
-		env.Set(rt.StringValue(k), v)
-	}
+	seedMockScreepsModule(t, r)
 
 	preload := preloadTable(t, r)
 	for _, mod := range []struct{ name, path string }{
@@ -480,12 +493,29 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read raider/main.lua: %v", err)
 	}
-	if err := doLuaString(r, "raider/main.lua", string(mainSrc)); err != nil {
+	mainRet, err := doLuaStringRet(r, "raider/main.lua", string(mainSrc))
+	if err != nil {
 		t.Fatalf("load raider/main.lua: %v", err)
 	}
+	mainTbl, ok := mainRet.TryTable()
+	if !ok {
+		t.Fatalf("expected raider/main.lua to return a table, got %s", mainRet.TypeName())
+	}
+	loopFn := mainTbl.Get(rt.StringValue("loop"))
+	if loopFn.Type() != rt.FunctionType {
+		t.Fatalf("expected returned loop to be a function, got %s", loopFn.TypeName())
+	}
+	env.Set(rt.StringValue("__test_loop"), loopFn)
 
 	script := `
-		Memory = { creeps = {}, rooms = {} }
+		local screeps = require("screeps")
+		local OK = screeps.OK
+		local ERR = screeps.ERR
+		local FIND = screeps.FIND
+		local PART = screeps.PART
+		local STRUCTURE = screeps.STRUCTURE
+
+		screeps.Memory = { creeps = {}, rooms = {} }
 		local function makePos(x, y, rn)
 			local p = { x = x, y = y, roomName = rn }
 			function p:getRangeTo(a, b)
@@ -524,20 +554,20 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 		}
 
 		local homeSpawn = {
-			id = "sp1", name = "Spawn1", structureType = STRUCTURE_SPAWN,
+			id = "sp1", name = "Spawn1", structureType = STRUCTURE.SPAWN,
 			pos = makePos(25, 25, "W1N1"), store = makeStore(300, 300),
 			hits = 5000, hitsMax = 5000, spawning = false,
 			spawnCreep = function() return OK end,
 		}
 		local enemySpawn = {
-			id = "esp1", name = "EnemySpawn", structureType = STRUCTURE_SPAWN,
+			id = "esp1", name = "EnemySpawn", structureType = STRUCTURE.SPAWN,
 			pos = makePos(25, 25, "W2N1"), store = makeStore(300, 300),
 			hits = 5000, hitsMax = 5000,
 		}
 		local enemyCreep = {
 			id = "ec1", name = "EnemyWorker",
 			pos = makePos(22, 25, "W2N1"), hits = 100, hitsMax = 100,
-			body = { { type = WORK, hits = 100 }, { type = MOVE, hits = 100 } },
+			body = { { type = PART.WORK, hits = 100 }, { type = PART.MOVE, hits = 100 } },
 		}
 
 		local homeRoom = {
@@ -547,7 +577,7 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 			visual = visual, memory = {},
 			getTerrain = function() return terrain end,
 			createConstructionSite = function() return OK end,
-			findExitTo = function(_, tgt) if tgt == "W2N1" then return FIND_EXIT_LEFT end return ERR_NO_PATH end,
+			findExitTo = function(_, tgt) if tgt == "W2N1" then return FIND.EXIT_LEFT end return ERR.NO_PATH end,
 		}
 		local enemyRoom = {
 			name = "W2N1",
@@ -555,7 +585,7 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 			energyAvailable = 0, energyCapacityAvailable = 0,
 			visual = visual, memory = {},
 			getTerrain = function() return terrain end,
-			findExitTo = function(_, tgt) if tgt == "W1N1" then return FIND_EXIT_RIGHT end return ERR_NO_PATH end,
+			findExitTo = function(_, tgt) if tgt == "W1N1" then return FIND.EXIT_RIGHT end return ERR.NO_PATH end,
 		}
 
 		local function makeCreep(id, name, role, room, x, y, body, hits, hitsMax)
@@ -573,28 +603,28 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 			return c
 		end
 
-		local scout = makeCreep("s1", "R_scout_1", "scout", enemyRoom, 20, 20, { { type = MOVE, hits = 100 } }, 100, 100)
-		local brawler = makeCreep("b1", "R_brawler_1", "brawler", enemyRoom, 21, 25, { { type = ATTACK, hits = 100 }, { type = MOVE, hits = 100 } }, 200, 200)
-		local skirm = makeCreep("k1", "R_skirm_1", "skirmisher", enemyRoom, 20, 25, { { type = RANGED_ATTACK, hits = 100 }, { type = MOVE, hits = 100 } }, 200, 200)
-		local medic = makeCreep("m1", "R_medic_1", "medic", enemyRoom, 19, 25, { { type = HEAL, hits = 100 }, { type = MOVE, hits = 100 } }, 200, 200)
-		local hurtBrawler = makeCreep("b2", "R_brawler_2", "brawler", enemyRoom, 20, 26, { { type = ATTACK, hits = 100 }, { type = MOVE, hits = 100 } }, 30, 200)
+		local scout = makeCreep("s1", "R_scout_1", "scout", enemyRoom, 20, 20, { { type = PART.MOVE, hits = 100 } }, 100, 100)
+		local brawler = makeCreep("b1", "R_brawler_1", "brawler", enemyRoom, 21, 25, { { type = PART.ATTACK, hits = 100 }, { type = PART.MOVE, hits = 100 } }, 200, 200)
+		local skirm = makeCreep("k1", "R_skirm_1", "skirmisher", enemyRoom, 20, 25, { { type = PART.RANGED_ATTACK, hits = 100 }, { type = PART.MOVE, hits = 100 } }, 200, 200)
+		local medic = makeCreep("m1", "R_medic_1", "medic", enemyRoom, 19, 25, { { type = PART.HEAL, hits = 100 }, { type = PART.MOVE, hits = 100 } }, 200, 200)
+		local hurtBrawler = makeCreep("b2", "R_brawler_2", "brawler", enemyRoom, 20, 26, { { type = PART.ATTACK, hits = 100 }, { type = PART.MOVE, hits = 100 } }, 30, 200)
 
 		function homeRoom:find(what)
-			if what == FIND_MY_SPAWNS then return { homeSpawn } end
-			if what == FIND_MY_STRUCTURES or what == FIND_STRUCTURES then return { homeSpawn } end
-			if what == FIND_EXIT_LEFT then return { makePos(0, 25, "W1N1") } end
+			if what == FIND.MY_SPAWNS then return { homeSpawn } end
+			if what == FIND.MY_STRUCTURES or what == FIND.STRUCTURES then return { homeSpawn } end
+			if what == FIND.EXIT_LEFT then return { makePos(0, 25, "W1N1") } end
 			return {}
 		end
 		function enemyRoom:find(what)
-			if what == FIND_HOSTILE_SPAWNS then return { enemySpawn } end
-			if what == FIND_HOSTILE_CREEPS then return { enemyCreep } end
-			if what == FIND_HOSTILE_STRUCTURES then return { enemySpawn } end
-			if what == FIND_MY_CREEPS then return { scout, brawler, skirm, medic, hurtBrawler } end
-			if what == FIND_EXIT_RIGHT then return { makePos(49, 25, "W2N1") } end
+			if what == FIND.HOSTILE_SPAWNS then return { enemySpawn } end
+			if what == FIND.HOSTILE_CREEPS then return { enemyCreep } end
+			if what == FIND.HOSTILE_STRUCTURES then return { enemySpawn } end
+			if what == FIND.MY_CREEPS then return { scout, brawler, skirm, medic, hurtBrawler } end
+			if what == FIND.EXIT_RIGHT then return { makePos(49, 25, "W2N1") } end
 			return {}
 		end
 
-		Game = {
+		screeps.Game = {
 			time = 40,
 			rooms = { W1N1 = homeRoom, W2N1 = enemyRoom },
 			creeps = {
@@ -614,9 +644,9 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 			},
 		}
 
-		loop()
+		__test_loop(screeps.Game, screeps.Memory)
 
-		assert(Memory.raidTarget == "W2N1", "scout/intel should record W2N1 as Memory.raidTarget")
+		assert(screeps.Memory.raidTarget == "W2N1", "scout/intel should record W2N1 as Memory.raidTarget")
 		assert(brawler.attacked > 0, "brawler should attack hostile creep in range")
 		assert(skirm.ranged > 0, "skirmisher should rangedAttack hostile creep in range")
 		assert(medic.healed > 0, "medic should heal wounded brawler")

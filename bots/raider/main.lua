@@ -2,49 +2,56 @@
 -- Modules: colony.lua, economy.lua, planner.lua, combat.lua.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
+local screeps <const> = require("screeps")
+local FIND <const> = screeps.FIND
+local PART <const> = screeps.PART
+
 local RaiderColony <const> = require("colony")
 local economy <const> = require("economy")
 local combat <const> = require("combat")
 
 ---Remove stale Memory.creeps entries and initialize top-level Raider Memory tables.
-local function cleanupMemory()
-    if not Memory.creeps then
-        Memory.creeps = {}
+---@param game Game
+---@param memory Memory
+local function cleanupMemory(game, memory)
+    if not memory.creeps then
+        memory.creeps = {}
     else
-        for name, _ in pairs(Memory.creeps) do
-            if not Game.creeps or not Game.creeps[name] then
-                Memory.creeps[name] = nil
+        for name, _ in pairs(memory.creeps) do
+            if not game.creeps or not game.creeps[name] then
+                memory.creeps[name] = nil
             end
         end
     end
-    if not Memory.rooms then
-        Memory.rooms = {}
+    if not memory.rooms then
+        memory.rooms = {}
     end
-    if not Memory.scoutedRooms then
-        Memory.scoutedRooms = {}
+    if not memory.scoutedRooms then
+        memory.scoutedRooms = {}
     end
 end
 
 ---Adopt any owned creep missing creep.memory.role.
-local function adoptUnassignedCreeps()
-    if not Game.creeps then
+---@param game Game
+local function adoptUnassignedCreeps(game)
+    if not game.creeps then
         return
     end
-    for _, creep in pairs(Game.creeps) do
+    for _, creep in pairs(game.creeps) do
         if creep.memory and creep.memory.role == nil then
             local attack, ranged, heal, work, carry = 0, 0, 0, 0, 0
             if creep.body then
                 for _, part in ipairs(creep.body) do
                     local pt = (type(part) == "table" and part.type) or part
-                    if pt == ATTACK then
+                    if pt == PART.ATTACK then
                         attack = attack + 1
-                    elseif pt == RANGED_ATTACK then
+                    elseif pt == PART.RANGED_ATTACK then
                         ranged = ranged + 1
-                    elseif pt == HEAL then
+                    elseif pt == PART.HEAL then
                         heal = heal + 1
-                    elseif pt == WORK then
+                    elseif pt == PART.WORK then
                         work = work + 1
-                    elseif pt == CARRY then
+                    elseif pt == PART.CARRY then
                         carry = carry + 1
                     end
                 end
@@ -72,25 +79,27 @@ local function adoptUnassignedCreeps()
 end
 
 ---Main tick entry point invoked every tick by the Screeps Lua engine.
-function loop()
-    cleanupMemory()
-    adoptUnassignedCreeps()
+---@param game Game
+---@param memory Memory
+local function loop(game, memory)
+    cleanupMemory(game, memory)
+    adoptUnassignedCreeps(game)
 
     local globalCounts = RaiderColony.countGlobalRoles()
 
-    if Game.rooms then
-        for _, room in pairs(Game.rooms) do
+    if game.rooms then
+        for _, room in pairs(game.rooms) do
             combat.updateIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
-                or (#(room:find(FIND_MY_SPAWNS) or {}) > 0)
+                or (#(room:find(FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
                 RaiderColony.new(room, globalCounts):run()
             end
         end
     end
 
-    if Game.creeps then
-        for _, creep in pairs(Game.creeps) do
+    if game.creeps then
+        for _, creep in pairs(game.creeps) do
             local role = creep.memory and creep.memory.role
             if role == "harvester" or role == "hauler" or role == "upgrader" or role == "builder" then
                 economy.run(creep)
@@ -100,3 +109,7 @@ function loop()
         end
     end
 end
+
+return {
+    loop = loop,
+}

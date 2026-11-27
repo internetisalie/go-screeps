@@ -1,6 +1,13 @@
 -- defense.lua: Object-oriented room threat tracking, tower focus-fire, Safe Mode, and combat body builders.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
+local screeps <const> = require("screeps")
+local OK <const> = screeps.OK
+local FIND <const> = screeps.FIND
+local PART <const> = screeps.PART
+local RESOURCE <const> = screeps.RESOURCE
+local STRUCTURE <const> = screeps.STRUCTURE
+
 ---@class ThreatState
 ---@field level integer 0=none, 1=weak (<=60), 2=normal (<=200), 3=strong (>200)
 ---@field count integer
@@ -30,22 +37,22 @@ local function getUsedEnergy(store)
     if not store then
         return 0
     end
-    return store:getUsedCapacity(RESOURCE_ENERGY) or 0
+    return store:getUsedCapacity(RESOURCE.ENERGY) or 0
 end
 
 ---@param roomName string
 ---@return table<string, any>|nil
 local function ensureRoomMemory(roomName)
-    if not Memory then
+    if not screeps.Memory then
         return nil
     end
-    if not Memory.rooms then
-        Memory.rooms = {}
+    if not screeps.Memory.rooms then
+        screeps.Memory.rooms = {}
     end
-    if not Memory.rooms[roomName] then
-        Memory.rooms[roomName] = {}
+    if not screeps.Memory.rooms[roomName] then
+        screeps.Memory.rooms[roomName] = {}
     end
-    return Memory.rooms[roomName]
+    return screeps.Memory.rooms[roomName]
 end
 
 ---Compute Hivemind-style part-weighted combat strength for a hostile creep.
@@ -103,7 +110,7 @@ end
 ---@param room Room
 ---@return Structure|nil
 local function selectTowerRepairTarget(room)
-    local structures = room:find(FIND_STRUCTURES) ---@type Structure[]
+    local structures = room:find(FIND.STRUCTURES) ---@type Structure[]
     if not structures or #structures == 0 then
         return nil
     end
@@ -115,12 +122,12 @@ local function selectTowerRepairTarget(room)
 
     for _, s in ipairs(structures) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCTURE_RAMPART then
+            if s.structureType == STRUCTURE.RAMPART then
                 if s.hits < lowestRampartHits and s.hits < s.hitsMax then
                     lowestRampartHits = s.hits
                     criticalRampart = s
                 end
-            elseif s.structureType ~= STRUCTURE_WALL then
+            elseif s.structureType ~= STRUCTURE.WALL then
                 local ratio = s.hits / s.hitsMax
                 if ratio < worstRegularRatio then
                     worstRegularRatio = ratio
@@ -159,7 +166,7 @@ end
 ---@return Creep[] hostiles
 function DefenseManager:assessThreat()
     local room = self.room
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {} ---@type Creep[]
+    local hostiles = room:find(FIND.HOSTILE_CREEPS) or {} ---@type Creep[]
     local count = #hostiles
     local enemyStrength = 0
     local level = 0
@@ -188,7 +195,7 @@ function DefenseManager:assessThreat()
             level = level,
             count = count,
             strength = enemyStrength,
-            lastSeen = (count > 0 and (Game.time or 0)) or prevLastSeen,
+            lastSeen = (count > 0 and (screeps.Game.time or 0)) or prevLastSeen,
         }
     end
 
@@ -213,7 +220,7 @@ end
 ---Run coordinated tower actions: focus-fire hostiles -> heal friendlies -> repair critical structures.
 function DefenseManager:runTowers()
     local room = self.room
-    local myStructures = room:find(FIND_MY_STRUCTURES) ---@type Structure[]
+    local myStructures = room:find(FIND.MY_STRUCTURES) ---@type Structure[]
     if not myStructures or #myStructures == 0 then
         return
     end
@@ -221,7 +228,7 @@ function DefenseManager:runTowers()
     ---@type StructureTower[]
     local towers = {}
     for _, s in ipairs(myStructures) do
-        if s.structureType == STRUCTURE_TOWER then
+        if s.structureType == STRUCTURE.TOWER then
             table.insert(towers, s --[[@as StructureTower]])
         end
     end
@@ -231,7 +238,7 @@ function DefenseManager:runTowers()
 
     -- 1. Coordinated focus-fire on hostiles.
     if #self.hostiles > 0 then
-        local spawns = room:find(FIND_MY_SPAWNS) ---@type StructureSpawn[]
+        local spawns = room:find(FIND.MY_SPAWNS) ---@type StructureSpawn[]
         local anchor = (spawns and spawns[1] and spawns[1].pos) or towers[1].pos
         local primaryTarget = selectFocusHostile(self.hostiles, anchor)
 
@@ -251,7 +258,7 @@ function DefenseManager:runTowers()
     end
 
     -- 2. Heal most injured friendly creep.
-    local myCreeps = room:find(FIND_MY_CREEPS) or {} ---@type Creep[]
+    local myCreeps = room:find(FIND.MY_CREEPS) or {} ---@type Creep[]
     local mostInjured = nil
     local lowestRatio = 1.0
     for _, c in ipairs(myCreeps) do
@@ -318,7 +325,7 @@ function DefenseManager:checkSafeMode(defenderCount)
         return false
     end
 
-    local spawns = room:find(FIND_MY_SPAWNS) or {} ---@type StructureSpawn[]
+    local spawns = room:find(FIND.MY_SPAWNS) or {} ---@type StructureSpawn[]
     local spawn = spawns[1]
     if not spawn then
         return false
@@ -350,7 +357,7 @@ function DefenseManager.buildDefenderBody(budget)
         return nil
     end
     if budget < 190 then
-        return { ATTACK, MOVE }
+        return { PART.ATTACK, PART.MOVE }
     end
 
     ---@type BodyPartType[]
@@ -372,23 +379,23 @@ function DefenseManager.buildDefenderBody(budget)
     end
 
     if budget >= 510 then
-        addParts({ TOUGH, TOUGH, ATTACK, ATTACK, ATTACK, MOVE, MOVE, MOVE, MOVE, MOVE }, 510)
+        addParts({ PART.TOUGH, PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE, PART.MOVE, PART.MOVE, PART.MOVE }, 510)
     elseif budget >= 320 then
-        addParts({ TOUGH, ATTACK, ATTACK, MOVE, MOVE, MOVE }, 320)
+        addParts({ PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE, PART.MOVE }, 320)
     else
-        addParts({ TOUGH, ATTACK, MOVE, MOVE }, 190)
+        addParts({ PART.TOUGH, PART.ATTACK, PART.MOVE, PART.MOVE }, 190)
     end
 
     local addRanged = false
     while #body <= 12 do
         local added
         if addRanged then
-            added = addParts({ RANGED_ATTACK, MOVE }, 200)
+            added = addParts({ PART.RANGED_ATTACK, PART.MOVE }, 200)
         else
-            added = addParts({ TOUGH, ATTACK, MOVE, MOVE }, 190)
+            added = addParts({ PART.TOUGH, PART.ATTACK, PART.MOVE, PART.MOVE }, 190)
         end
         if not added then
-            if not addParts({ ATTACK, MOVE }, 130) then
+            if not addParts({ PART.ATTACK, PART.MOVE }, 130) then
                 break
             end
         end
@@ -398,12 +405,12 @@ function DefenseManager.buildDefenderBody(budget)
     ---@type BodyPartType[]
     local ordered = {}
     for _, p in ipairs(body) do
-        if p == TOUGH then
+        if p == PART.TOUGH then
             table.insert(ordered, p)
         end
     end
     for _, p in ipairs(body) do
-        if p ~= TOUGH then
+        if p ~= PART.TOUGH then
             table.insert(ordered, p)
         end
     end
@@ -424,25 +431,25 @@ function DefenseManager.buildAssaultBody(budget)
     local toughCount = math.min(4, budget // 280)
     for _ = 1, toughCount do
         if cost + 60 <= budget then
-            table.insert(body, TOUGH)
+            table.insert(body, PART.TOUGH)
             cost = cost + 10
         end
     end
     local attackCount = 0
     while cost + 130 <= budget and (#body + attackCount + 2) <= 24 do
-        table.insert(body, ATTACK)
+        table.insert(body, PART.ATTACK)
         cost = cost + 80
         attackCount = attackCount + 1
         cost = cost + 50
     end
     cost = cost - (attackCount * 50)
     if attackCount == 0 then
-        return { TOUGH, ATTACK, ATTACK, MOVE, MOVE }
+        return { PART.TOUGH, PART.ATTACK, PART.ATTACK, PART.MOVE, PART.MOVE }
     end
     local moveCount = math.min(24 - #body, math.max(attackCount + (toughCount // 2), (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
-            table.insert(body, MOVE)
+            table.insert(body, PART.MOVE)
             cost = cost + 50
         end
     end
@@ -461,19 +468,19 @@ function DefenseManager.buildHealerBody(budget)
     local cost = 0
     local healCount = 0
     while cost + 300 <= budget and (#body + healCount + 2) <= 20 do
-        table.insert(body, HEAL)
+        table.insert(body, PART.HEAL)
         cost = cost + 250
         healCount = healCount + 1
         cost = cost + 50
     end
     cost = cost - (healCount * 50)
     if healCount == 0 then
-        return { HEAL, MOVE }
+        return { PART.HEAL, PART.MOVE }
     end
     local moveCount = math.min(20 - #body, math.max(healCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
-            table.insert(body, MOVE)
+            table.insert(body, PART.MOVE)
             cost = cost + 50
         end
     end

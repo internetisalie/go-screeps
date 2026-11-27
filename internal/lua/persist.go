@@ -264,12 +264,12 @@ func goMapToLuaTable(m map[string]any) *rt.Table {
 	return tbl
 }
 
-// ExportMemory converts the bot VM's global Lua Memory table into a JSON-serializable map.
+// ExportMemory converts the bot VM's screeps.Memory table into a JSON-serializable map.
 func (vm *BotVM) ExportMemory() map[string]any {
-	if vm == nil || vm.R == nil {
+	if vm == nil || vm.R == nil || vm.screepsMod == nil {
 		return map[string]any{}
 	}
-	memVal := vm.R.GlobalEnv().Get(rt.StringValue("Memory"))
+	memVal := tblGet(vm.screepsMod, "Memory")
 	tbl, ok := memVal.TryTable()
 	if !ok {
 		return map[string]any{}
@@ -277,9 +277,9 @@ func (vm *BotVM) ExportMemory() map[string]any {
 	return luaTableToMap(tbl)
 }
 
-// ImportMemory replaces the bot VM's global Lua Memory table with data from mem.
+// ImportMemory replaces the bot VM's screeps.Memory table with data from mem.
 func (vm *BotVM) ImportMemory(mem map[string]any) {
-	if vm == nil || vm.R == nil {
+	if vm == nil || vm.R == nil || vm.screepsMod == nil {
 		return
 	}
 	tbl := goMapToLuaTable(mem)
@@ -289,7 +289,7 @@ func (vm *BotVM) ImportMemory(mem map[string]any) {
 	if tbl.Get(rt.StringValue("rooms")).IsNil() {
 		tbl.Set(rt.StringValue("rooms"), rt.TableValue(rt.NewTable()))
 	}
-	vm.R.GlobalEnv().Set(rt.StringValue("Memory"), rt.TableValue(tbl))
+	tblSet(vm.screepsMod, "Memory", rt.TableValue(tbl))
 }
 
 // SetStatePath configures the file path for automatic periodic saves and shutdown save.

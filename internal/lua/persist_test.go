@@ -16,39 +16,45 @@ func TestPersistRoundTripWorldAndMemory(t *testing.T) {
 	botFS := fstest.MapFS{
 		"bot/main.lua": &fstest.MapFile{
 			Data: []byte(`
-function loop()
-	Memory.ticks = (Memory.ticks or 0) + 1
-	Memory.lastGameTime = Game.time
-	Memory.flag = true
-	Memory.label = "alpha-colony"
-	Memory.queue = { "harvester", "upgrader", "builder" }
-	Memory.nested = {
-		level = 2,
-		coords = { 10, 20, 30 },
-		meta = { active = true, note = "ok" },
-	}
-	-- Unsupported values should be ignored cleanly without panicking.
-	Memory.ignoredFn = function() return 42 end
-	Memory.ignoredNaN = 0 / 0
+local screeps <const> = require("screeps")
+local PART <const> = screeps.PART
+local OK <const> = screeps.OK
 
-	for name, spawn in pairs(Game.spawns) do
-		if not spawn.spawning then
-			local cname = "c_" .. tostring(Game.time)
-			local rc = spawn:spawnCreep({ WORK, CARRY, MOVE }, cname)
-			if rc == OK then
-				Memory.creeps[cname] = { role = "harvester", born = Game.time }
+return {
+	loop = function(Game, Memory)
+		Memory.ticks = (Memory.ticks or 0) + 1
+		Memory.lastGameTime = Game.time
+		Memory.flag = true
+		Memory.label = "alpha-colony"
+		Memory.queue = { "harvester", "upgrader", "builder" }
+		Memory.nested = {
+			level = 2,
+			coords = { 10, 20, 30 },
+			meta = { active = true, note = "ok" },
+		}
+		-- Unsupported values should be ignored cleanly without panicking.
+		Memory.ignoredFn = function() return 42 end
+		Memory.ignoredNaN = 0 / 0
+
+		for name, spawn in pairs(Game.spawns) do
+			if not spawn.spawning then
+				local cname = "c_" .. tostring(Game.time)
+				local rc = spawn:spawnCreep({ PART.WORK, PART.CARRY, PART.MOVE }, cname)
+				if rc == OK then
+					Memory.creeps[cname] = { role = "harvester", born = Game.time }
+				end
 			end
 		end
-	end
 
-	for name, creep in pairs(Game.creeps) do
-		if not Memory.creeps[name] then
-			Memory.creeps[name] = { role = "worker" }
+		for name, creep in pairs(Game.creeps) do
+			if not Memory.creeps[name] then
+				Memory.creeps[name] = { role = "worker" }
+			end
+			Memory.creeps[name].lastSeen = Game.time
+			creep:say("hi")
 		end
-		Memory.creeps[name].lastSeen = Game.time
-		creep:say("hi")
 	end
-end
+}
 `),
 		},
 	}
@@ -126,6 +132,7 @@ end
 
 	// Verify specific nested values directly inside Lua.
 	if err := restoredVM.DoString(`
+		local Memory = require("screeps").Memory
 		assert(Memory.ticks == 15, "expected Memory.ticks == 15, got " .. tostring(Memory.ticks))
 		assert(Memory.flag == true, "expected Memory.flag == true")
 		assert(Memory.label == "alpha-colony", "expected Memory.label == alpha-colony")
@@ -151,6 +158,7 @@ end
 		t.Fatalf("restored bot Lua error after stepping: %s", restoredVM.LastError)
 	}
 	if err := restoredVM.DoString(`
+		local Memory = require("screeps").Memory
 		assert(Memory.ticks == 25, "expected Memory.ticks == 25 after 10 more ticks, got " .. tostring(Memory.ticks))
 	`); err != nil {
 		t.Fatalf("Lua continuation assertion failed: %v", err)
@@ -161,7 +169,7 @@ func TestAutoSaveIntervalAndClose(t *testing.T) {
 	botFS := fstest.MapFS{
 		"bot/main.lua": &fstest.MapFile{
 			Data: []byte(`
-function loop()
+return function(_, Memory)
 	Memory.count = (Memory.count or 0) + 1
 end
 `),
@@ -226,6 +234,7 @@ func TestMemoryConversionEdgeCases(t *testing.T) {
 	vm.R.GlobalEnv().Set(rt.StringValue("testUD"), rt.UserDataValue(ud))
 
 	if err := vm.DoString(`
+		local Memory = require("screeps").Memory
 		local cyc = { name = "root" }
 		cyc.self = cyc
 		Memory.cyclic = cyc
@@ -258,7 +267,7 @@ func TestMemoryConversionEdgeCases(t *testing.T) {
 
 	// Import nil should still preserve Memory.creeps and Memory.rooms tables.
 	vm.ImportMemory(nil)
-	memVal := vm.R.GlobalEnv().Get(rt.StringValue("Memory"))
+	memVal := vm.screepsMod.Get(rt.StringValue("Memory"))
 	tbl, ok := memVal.TryTable()
 	if !ok {
 		t.Fatalf("expected Memory table after ImportMemory(nil)")

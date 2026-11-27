@@ -100,12 +100,14 @@ func (vm *BotVM) loadMain() error {
 		return fmt.Errorf("compile main.lua: %w", err)
 	}
 
+	var retVal rt.Value
 	ctx, err := vm.R.MainThread().CallContext(rt.RuntimeContextDef{
 		HardLimits: rt.RuntimeResources{
 			Millis: limitMs,
 		},
 	}, func() error {
-		_, callErr := rt.Call1(vm.R.MainThread(), rt.FunctionValue(clos))
+		var callErr error
+		retVal, callErr = rt.Call1(vm.R.MainThread(), rt.FunctionValue(clos))
 		return callErr
 	})
 	if err != nil {
@@ -114,6 +116,19 @@ func (vm *BotVM) loadMain() error {
 			err = fmt.Errorf("%w: %v", context.DeadlineExceeded, err)
 		}
 		return fmt.Errorf("execute main.lua: %w", err)
+	}
+	vm.loopFn = extractLoopFn(retVal)
+	return nil
+}
+
+func extractLoopFn(res rt.Value) rt.Callable {
+	if fn, ok := res.TryCallable(); ok {
+		return fn
+	}
+	if tbl, ok := res.TryTable(); ok {
+		if fn, ok := tblGet(tbl, "loop").TryCallable(); ok {
+			return fn
+		}
 	}
 	return nil
 }
@@ -125,6 +140,9 @@ func (vm *BotVM) clearUserModules() {
 	if pkg, ok := vm.R.GlobalEnv().Get(rt.StringValue("package")).TryTable(); ok {
 		if loaded, ok := pkg.Get(rt.StringValue("loaded")).TryTable(); ok {
 			for modName := range vm.loadedModules {
+				if modName == "screeps" {
+					continue
+				}
 				loaded.Set(rt.StringValue(modName), rt.NilValue)
 			}
 		}
@@ -139,6 +157,11 @@ func (vm *BotVM) luaRequire(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	modName, err := c.StringArg(0)
 	if err != nil {
 		return nil, err
+	}
+
+	// Built-in screeps module is always available and never cleared on hot-reload.
+	if modName == "screeps" && vm.screepsMod != nil {
+		return c.PushingNext1(t.Runtime, rt.TableValue(vm.screepsMod)), nil
 	}
 
 	var loaded *rt.Table

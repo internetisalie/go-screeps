@@ -22,13 +22,6 @@
 ---@field roomName string
 local RoomPositionProto = {}
 
----Construct a new RoomPosition.
----@param x integer
----@param y integer
----@param roomName string
----@return RoomPosition
-function RoomPosition(x, y, roomName) end
-
 ---Chebyshev distance to another position or RoomObject (or x, y coordinates).
 ---@overload fun(self: RoomPosition, x: integer, y: integer): integer
 ---@param target RoomObject|RoomPosition|PosLike

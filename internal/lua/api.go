@@ -30,6 +30,7 @@ var internedKeys = func() map[string]rt.Value {
 		"time", "rooms", "creeps", "spawns", "structures", "constructionSites",
 		"getObjectById", "cpu", "limit", "tickLimit", "bucket", "getUsed",
 		"map", "describeExits", "Memory", "Game", "PathFinder", "CostMatrix",
+		"loop", "log", "screeps",
 		"new", "search", "range", "filter", "plainCost", "swampCost", "flee",
 		"maxOps", "maxRooms", "maxCost", "heuristicWeight", "roomCallback",
 		"path", "ops", "cost", "incomplete", "ignoreCreeps", "reusePath",
@@ -163,37 +164,62 @@ func optInt(c *rt.GoCont, n int, def int) int {
 	return def
 }
 
-// initAPI injects all Screeps constants, reusable metatables, and PathFinder into vm.R.
+// initAPI builds the built-in require("screeps") module table and reusable metatables.
+// No Screeps globals are placed in _G.
 func (vm *BotVM) initAPI() {
-	vm.injectConstants()
 	vm.initMetatables()
-	vm.injectPathFinder()
+	vm.screepsMod = vm.buildScreepsModule()
+	if pkg, ok := vm.R.GlobalEnv().Get(rt.StringValue("package")).TryTable(); ok {
+		if loaded, ok := pkg.Get(rt.StringValue("loaded")).TryTable(); ok {
+			loaded.Set(rt.StringValue("screeps"), rt.TableValue(vm.screepsMod))
+		}
+	}
 }
 
-func (vm *BotVM) injectConstants() {
-	env := vm.R.GlobalEnv()
+func makeIntTable(entries map[string]int) *rt.Table {
+	t := rt.NewTableWithCapacity(0, len(entries))
+	for k, v := range entries {
+		tblSet(t, k, rt.IntValue(int64(v)))
+	}
+	return t
+}
 
-	intConsts := map[string]int{
-		// Return / error codes
-		"OK":                        engine.OK,
-		"ERR_NOT_OWNER":             engine.ERR_NOT_OWNER,
-		"ERR_NO_PATH":               engine.ERR_NO_PATH,
-		"ERR_NAME_EXISTS":           engine.ERR_NAME_EXISTS,
-		"ERR_BUSY":                  engine.ERR_BUSY,
-		"ERR_NOT_FOUND":             engine.ERR_NOT_FOUND,
-		"ERR_NOT_ENOUGH_ENERGY":     engine.ERR_NOT_ENOUGH_ENERGY,
-		"ERR_NOT_ENOUGH_RESOURCES":  engine.ERR_NOT_ENOUGH_RESOURCES,
-		"ERR_NOT_ENOUGH_EXTENSIONS": engine.ERR_NOT_ENOUGH_EXTENSIONS,
-		"ERR_INVALID_TARGET":        engine.ERR_INVALID_TARGET,
-		"ERR_FULL":                  engine.ERR_FULL,
-		"ERR_NOT_IN_RANGE":          engine.ERR_NOT_IN_RANGE,
-		"ERR_INVALID_ARGS":          engine.ERR_INVALID_ARGS,
-		"ERR_TIRED":                 engine.ERR_TIRED,
-		"ERR_NO_BODYPART":           engine.ERR_NO_BODYPART,
-		"ERR_RCL_NOT_ENOUGH":        engine.ERR_RCL_NOT_ENOUGH,
-		"ERR_GCL_NOT_ENOUGH":        engine.ERR_GCL_NOT_ENOUGH,
+func makeStrTable(entries map[string]string) *rt.Table {
+	t := rt.NewTableWithCapacity(0, len(entries))
+	for k, v := range entries {
+		tblSet(t, k, rt.StringValue(v))
+	}
+	return t
+}
 
-		// Directions
+func (vm *BotVM) buildScreepsModule() *rt.Table {
+	mod := rt.NewTable()
+
+	// OK return code
+	tblSet(mod, "OK", rt.IntValue(int64(engine.OK)))
+
+	// ERR.* error codes
+	tblSet(mod, "ERR", rt.TableValue(makeIntTable(map[string]int{
+		"NOT_OWNER":             engine.ERR_NOT_OWNER,
+		"NO_PATH":               engine.ERR_NO_PATH,
+		"NAME_EXISTS":           engine.ERR_NAME_EXISTS,
+		"BUSY":                  engine.ERR_BUSY,
+		"NOT_FOUND":             engine.ERR_NOT_FOUND,
+		"NOT_ENOUGH_ENERGY":     engine.ERR_NOT_ENOUGH_ENERGY,
+		"NOT_ENOUGH_RESOURCES":  engine.ERR_NOT_ENOUGH_RESOURCES,
+		"NOT_ENOUGH_EXTENSIONS": engine.ERR_NOT_ENOUGH_EXTENSIONS,
+		"INVALID_TARGET":        engine.ERR_INVALID_TARGET,
+		"FULL":                  engine.ERR_FULL,
+		"NOT_IN_RANGE":          engine.ERR_NOT_IN_RANGE,
+		"INVALID_ARGS":          engine.ERR_INVALID_ARGS,
+		"TIRED":                 engine.ERR_TIRED,
+		"NO_BODYPART":           engine.ERR_NO_BODYPART,
+		"RCL_NOT_ENOUGH":        engine.ERR_RCL_NOT_ENOUGH,
+		"GCL_NOT_ENOUGH":        engine.ERR_GCL_NOT_ENOUGH,
+	})))
+
+	// DIR.* directions
+	tblSet(mod, "DIR", rt.TableValue(makeIntTable(map[string]int{
 		"TOP":          engine.TOP,
 		"TOP_RIGHT":    engine.TOP_RIGHT,
 		"RIGHT":        engine.RIGHT,
@@ -202,37 +228,99 @@ func (vm *BotVM) injectConstants() {
 		"BOTTOM_LEFT":  engine.BOTTOM_LEFT,
 		"LEFT":         engine.LEFT,
 		"TOP_LEFT":     engine.TOP_LEFT,
+	})))
 
-		// Terrain bitmasks
-		"TERRAIN_MASK_PLAIN": engine.TERRAIN_MASK_PLAIN,
-		"TERRAIN_MASK_WALL":  engine.TERRAIN_MASK_WALL,
-		"TERRAIN_MASK_SWAMP": engine.TERRAIN_MASK_SWAMP,
+	// TERRAIN.* bitmasks
+	tblSet(mod, "TERRAIN", rt.TableValue(makeIntTable(map[string]int{
+		"PLAIN": engine.TERRAIN_MASK_PLAIN,
+		"WALL":  engine.TERRAIN_MASK_WALL,
+		"SWAMP": engine.TERRAIN_MASK_SWAMP,
+	})))
 
-		// FIND_*
-		"FIND_EXIT_TOP":                   engine.FIND_EXIT_TOP,
-		"FIND_EXIT_RIGHT":                 engine.FIND_EXIT_RIGHT,
-		"FIND_EXIT_BOTTOM":                engine.FIND_EXIT_BOTTOM,
-		"FIND_EXIT_LEFT":                  engine.FIND_EXIT_LEFT,
-		"FIND_EXIT":                       engine.FIND_EXIT,
-		"FIND_CREEPS":                     engine.FIND_CREEPS,
-		"FIND_MY_CREEPS":                  engine.FIND_MY_CREEPS,
-		"FIND_HOSTILE_CREEPS":             engine.FIND_HOSTILE_CREEPS,
-		"FIND_SOURCES_ACTIVE":             engine.FIND_SOURCES_ACTIVE,
-		"FIND_SOURCES":                    engine.FIND_SOURCES,
-		"FIND_DROPPED_RESOURCES":          engine.FIND_DROPPED_RESOURCES,
-		"FIND_STRUCTURES":                 engine.FIND_STRUCTURES,
-		"FIND_MY_STRUCTURES":              engine.FIND_MY_STRUCTURES,
-		"FIND_HOSTILE_STRUCTURES":         engine.FIND_HOSTILE_STRUCTURES,
-		"FIND_FLAGS":                      engine.FIND_FLAGS,
-		"FIND_CONSTRUCTION_SITES":         engine.FIND_CONSTRUCTION_SITES,
-		"FIND_MY_SPAWNS":                  engine.FIND_MY_SPAWNS,
-		"FIND_HOSTILE_SPAWNS":             engine.FIND_HOSTILE_SPAWNS,
-		"FIND_MY_CONSTRUCTION_SITES":      engine.FIND_MY_CONSTRUCTION_SITES,
-		"FIND_HOSTILE_CONSTRUCTION_SITES": engine.FIND_HOSTILE_CONSTRUCTION_SITES,
-		"FIND_MINERALS":                   engine.FIND_MINERALS,
-		"FIND_TOMBSTONES":                 engine.FIND_TOMBSTONES,
+	// FIND.* constants
+	tblSet(mod, "FIND", rt.TableValue(makeIntTable(map[string]int{
+		"EXIT_TOP":                   engine.FIND_EXIT_TOP,
+		"EXIT_RIGHT":                 engine.FIND_EXIT_RIGHT,
+		"EXIT_BOTTOM":                engine.FIND_EXIT_BOTTOM,
+		"EXIT_LEFT":                  engine.FIND_EXIT_LEFT,
+		"EXIT":                       engine.FIND_EXIT,
+		"CREEPS":                     engine.FIND_CREEPS,
+		"MY_CREEPS":                  engine.FIND_MY_CREEPS,
+		"HOSTILE_CREEPS":             engine.FIND_HOSTILE_CREEPS,
+		"SOURCES_ACTIVE":             engine.FIND_SOURCES_ACTIVE,
+		"SOURCES":                    engine.FIND_SOURCES,
+		"DROPPED_RESOURCES":          engine.FIND_DROPPED_RESOURCES,
+		"STRUCTURES":                 engine.FIND_STRUCTURES,
+		"MY_STRUCTURES":              engine.FIND_MY_STRUCTURES,
+		"HOSTILE_STRUCTURES":         engine.FIND_HOSTILE_STRUCTURES,
+		"FLAGS":                      engine.FIND_FLAGS,
+		"CONSTRUCTION_SITES":         engine.FIND_CONSTRUCTION_SITES,
+		"MY_SPAWNS":                  engine.FIND_MY_SPAWNS,
+		"HOSTILE_SPAWNS":             engine.FIND_HOSTILE_SPAWNS,
+		"MY_CONSTRUCTION_SITES":      engine.FIND_MY_CONSTRUCTION_SITES,
+		"HOSTILE_CONSTRUCTION_SITES": engine.FIND_HOSTILE_CONSTRUCTION_SITES,
+		"MINERALS":                   engine.FIND_MINERALS,
+		"TOMBSTONES":                 engine.FIND_TOMBSTONES,
+	})))
 
-		// Creep & structure tuning constants
+	// PART.* body part constants
+	tblSet(mod, "PART", rt.TableValue(makeStrTable(map[string]string{
+		"MOVE":          engine.MOVE,
+		"WORK":          engine.WORK,
+		"CARRY":         engine.CARRY,
+		"ATTACK":        engine.ATTACK,
+		"RANGED_ATTACK": engine.RANGED_ATTACK,
+		"TOUGH":         engine.TOUGH,
+		"HEAL":          engine.HEAL,
+		"CLAIM":         engine.CLAIM,
+	})))
+
+	// COST.* body part energy costs
+	tblSet(mod, "COST", rt.TableValue(makeIntTable(engine.BODYPART_COST)))
+
+	// RESOURCE.* resource constants
+	tblSet(mod, "RESOURCE", rt.TableValue(makeStrTable(map[string]string{
+		"ENERGY":    engine.RESOURCE_ENERGY,
+		"HYDROGEN":  engine.RESOURCE_HYDROGEN,
+		"OXYGEN":    engine.RESOURCE_OXYGEN,
+		"UTRIUM":    engine.RESOURCE_UTRIUM,
+		"LEMERGIUM": engine.RESOURCE_LEMERGIUM,
+		"KEANIUM":   engine.RESOURCE_KEANIUM,
+		"ZYNTHIUM":  engine.RESOURCE_ZYNTHIUM,
+		"CATALYST":  engine.RESOURCE_CATALYST,
+	})))
+
+	// STRUCTURE.* structure type constants
+	tblSet(mod, "STRUCTURE", rt.TableValue(makeStrTable(map[string]string{
+		"SPAWN":      engine.STRUCTURE_SPAWN,
+		"EXTENSION":  engine.STRUCTURE_EXTENSION,
+		"ROAD":       engine.STRUCTURE_ROAD,
+		"WALL":       engine.STRUCTURE_WALL,
+		"RAMPART":    engine.STRUCTURE_RAMPART,
+		"LINK":       engine.STRUCTURE_LINK,
+		"STORAGE":    engine.STRUCTURE_STORAGE,
+		"TOWER":      engine.STRUCTURE_TOWER,
+		"CONTAINER":  engine.STRUCTURE_CONTAINER,
+		"CONTROLLER": engine.STRUCTURE_CONTROLLER,
+		"EXTRACTOR":  engine.STRUCTURE_EXTRACTOR,
+	})))
+
+	// LOOK.* lookForAt type constants
+	tblSet(mod, "LOOK", rt.TableValue(makeStrTable(map[string]string{
+		"CREEPS":             "creep",
+		"ENERGY":             "energy",
+		"RESOURCES":          "resource",
+		"SOURCES":            "source",
+		"MINERALS":           "mineral",
+		"STRUCTURES":         "structure",
+		"FLAGS":              "flag",
+		"CONSTRUCTION_SITES": "constructionSite",
+		"TERRAIN":            "terrain",
+		"TOMBSTONES":         "tombstone",
+	})))
+
+	// CONST.* game tuning constants
+	tblSet(mod, "CONST", rt.TableValue(makeIntTable(map[string]int{
 		"MAX_CREEP_SIZE":           engine.MAX_CREEP_SIZE,
 		"CREEP_LIFE_TIME":          engine.CREEP_LIFE_TIME,
 		"CREEP_CLAIM_LIFE_TIME":    engine.CREEP_CLAIM_LIFE_TIME,
@@ -252,70 +340,10 @@ func (vm *BotVM) injectConstants() {
 		"CONTAINER_CAPACITY":       engine.CONTAINER_CAPACITY,
 		"LINK_CAPACITY":            engine.LINK_CAPACITY,
 		"TOWER_CAPACITY":           engine.TOWER_CAPACITY,
-	}
-	for k, v := range intConsts {
-		tblSet(env, k, rt.IntValue(int64(v)))
-	}
+	})))
 
-	strConsts := map[string]string{
-		// Body parts
-		"MOVE":          engine.MOVE,
-		"WORK":          engine.WORK,
-		"CARRY":         engine.CARRY,
-		"ATTACK":        engine.ATTACK,
-		"RANGED_ATTACK": engine.RANGED_ATTACK,
-		"TOUGH":         engine.TOUGH,
-		"HEAL":          engine.HEAL,
-		"CLAIM":         engine.CLAIM,
-
-		// Resources
-		"RESOURCE_ENERGY":    engine.RESOURCE_ENERGY,
-		"RESOURCE_HYDROGEN":  engine.RESOURCE_HYDROGEN,
-		"RESOURCE_OXYGEN":    engine.RESOURCE_OXYGEN,
-		"RESOURCE_UTRIUM":    engine.RESOURCE_UTRIUM,
-		"RESOURCE_LEMERGIUM": engine.RESOURCE_LEMERGIUM,
-		"RESOURCE_KEANIUM":   engine.RESOURCE_KEANIUM,
-		"RESOURCE_ZYNTHIUM":  engine.RESOURCE_ZYNTHIUM,
-		"RESOURCE_CATALYST":  engine.RESOURCE_CATALYST,
-
-		// Structures
-		"STRUCTURE_SPAWN":      engine.STRUCTURE_SPAWN,
-		"STRUCTURE_EXTENSION":  engine.STRUCTURE_EXTENSION,
-		"STRUCTURE_ROAD":       engine.STRUCTURE_ROAD,
-		"STRUCTURE_WALL":       engine.STRUCTURE_WALL,
-		"STRUCTURE_RAMPART":    engine.STRUCTURE_RAMPART,
-		"STRUCTURE_LINK":       engine.STRUCTURE_LINK,
-		"STRUCTURE_STORAGE":    engine.STRUCTURE_STORAGE,
-		"STRUCTURE_TOWER":      engine.STRUCTURE_TOWER,
-		"STRUCTURE_CONTAINER":  engine.STRUCTURE_CONTAINER,
-		"STRUCTURE_CONTROLLER": engine.STRUCTURE_CONTROLLER,
-		"STRUCTURE_EXTRACTOR":  engine.STRUCTURE_EXTRACTOR,
-
-		// LOOK_*
-		"LOOK_CREEPS":             "creep",
-		"LOOK_ENERGY":             "energy",
-		"LOOK_RESOURCES":          "resource",
-		"LOOK_SOURCES":            "source",
-		"LOOK_MINERALS":           "mineral",
-		"LOOK_STRUCTURES":         "structure",
-		"LOOK_FLAGS":              "flag",
-		"LOOK_CONSTRUCTION_SITES": "constructionSite",
-		"LOOK_TERRAIN":            "terrain",
-		"LOOK_TOMBSTONES":         "tombstone",
-	}
-	for k, v := range strConsts {
-		tblSet(env, k, rt.StringValue(v))
-	}
-
-	// BODYPART_COST table
-	bpCost := rt.NewTable()
-	for part, cost := range engine.BODYPART_COST {
-		tblSet(bpCost, part, rt.IntValue(int64(cost)))
-	}
-	tblSet(env, "BODYPART_COST", rt.TableValue(bpCost))
-
-	// RoomPosition constructor global
-	tblSet(env, "RoomPosition", rt.FunctionValue(vm.newGoFunc("RoomPosition", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	// RoomPosition(x, y, roomName) constructor
+	tblSet(mod, "RoomPosition", rt.FunctionValue(vm.newGoFunc("screeps.RoomPosition", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		x, err := checkInt(c, 0)
 		if err != nil {
 			return nil, err
@@ -330,6 +358,23 @@ func (vm *BotVM) injectConstants() {
 		}
 		return c.PushingNext1(t.Runtime, rt.TableValue(vm.newRoomPosition(x, y, roomName))), nil
 	}, 3, false)))
+
+	// PathFinder namespace
+	tblSet(mod, "PathFinder", rt.TableValue(vm.buildPathFinder()))
+
+	// log(...) console logger
+	tblSet(mod, "log", rt.FunctionValue(vm.newGoFunc("screeps.log", vm.luaPrint, 0, true)))
+
+	// Persistent Memory table
+	mem := rt.NewTable()
+	tblSet(mem, "creeps", rt.TableValue(rt.NewTable()))
+	tblSet(mem, "rooms", rt.TableValue(rt.NewTable()))
+	tblSet(mod, "Memory", rt.TableValue(mem))
+
+	// Game placeholder (refreshed every tick in refreshGame)
+	tblSet(mod, "Game", rt.TableValue(rt.NewTable()))
+
+	return mod
 }
 
 type methodSpec struct {
@@ -423,7 +468,7 @@ func (vm *BotVM) initMetatables() {
 	})
 }
 
-func (vm *BotVM) injectPathFinder() {
+func (vm *BotVM) buildPathFinder() *rt.Table {
 	pf := rt.NewTable()
 
 	newCM := vm.newGoFunc("PathFinder.CostMatrix", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
@@ -439,10 +484,10 @@ func (vm *BotVM) injectPathFinder() {
 
 	tblSet(pf, "CostMatrix", rt.TableValue(cmCtor))
 	tblSet(pf, "search", rt.FunctionValue(vm.newGoFunc("PathFinder.search", vm.pathFinderSearch, 3, false)))
-	tblSet(vm.R.GlobalEnv(), "PathFinder", rt.TableValue(pf))
+	return pf
 }
 
-// refreshGame rebuilds the global Game table from world for this VM's UserID.
+// refreshGame rebuilds the screeps.Game table from world for this VM's UserID.
 func (vm *BotVM) refreshGame(world *engine.World) {
 	vm.objCache = make(map[string]*rt.Table, 64)
 	vm.roomCache = make(map[string]*rt.Table, 8)
@@ -609,17 +654,16 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 	}, 1, false)))
 	tblSet(game, "map", rt.TableValue(mapTbl))
 
-	tblSet(vm.R.GlobalEnv(), "Game", rt.TableValue(game))
+	tblSet(vm.screepsMod, "Game", rt.TableValue(game))
 }
 
 // --- Memory helpers ---
 
 func (vm *BotVM) ensureMemorySubtable(key string) *rt.Table {
-	env := vm.R.GlobalEnv()
-	mem, ok := tblGet(env, "Memory").TryTable()
+	mem, ok := tblGet(vm.screepsMod, "Memory").TryTable()
 	if !ok {
 		mem = rt.NewTable()
-		tblSet(env, "Memory", rt.TableValue(mem))
+		tblSet(vm.screepsMod, "Memory", rt.TableValue(mem))
 	}
 	sub, ok := tblGet(mem, key).TryTable()
 	if !ok {

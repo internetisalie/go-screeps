@@ -10,8 +10,5 @@
   "workspace.library": [
     "bots/types/library"
   ],
-  "workspace.checkThirdParty": false,
-  "diagnostics.globals": [
-    "loop"
-  ]
+  "workspace.checkThirdParty": false
 }
