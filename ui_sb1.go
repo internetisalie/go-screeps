@@ -228,7 +228,7 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 	var children []core.Widget
 
 	if s.localRunner != nil {
-		pauseLbl := "⏸ Pause"
+		pauseLbl := "|| Pause"
 		pauseActive := !s.localRunner.Paused()
 		if s.localRunner.Paused() {
 			pauseLbl = "▶ Play"
@@ -237,7 +237,7 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 			sbPill(pauseLbl, pauseActive, func() {
 				s.SetState(func() { s.localRunner.SetPaused(!s.localRunner.Paused()) })
 			}, th),
-			sbPill("⏭ Step", false, func() {
+			sbPill("▶| Step", false, func() {
 				s.localRunner.StepTick()
 				s.SetState(func() { s.applySnapshot(s.provider.Snapshot()) })
 				s.signal.Notify()
@@ -258,6 +258,7 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 			}, th))
 		}
 		children = append(children, basic.Row{
+			Size:     layout.MainMin,
 			Cross:    layout.CrossCenter,
 			Spacing:  2,
 			Children: speedPills,
@@ -269,7 +270,7 @@ func (s *viewerState) buildControlStrip(th *theme.Theme) core.Widget {
 		}, th))
 	}
 
-	yawDeg := int(math.Round(float64(s.cam.YawRadians()) * 180 / math.Pi))
+	yawDeg := ((int(math.Round(float64(s.cam.YawRadians())*180/math.Pi)) % 360) + 360) % 360
 	children = append(children,
 		basic.Expanded{Child: basic.SizedBox{}},
 		sbPill(fmt.Sprintf("Yaw %d°", yawDeg), false, func() {
@@ -348,10 +349,15 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 	// 1. Colonies section
 	sections = append(sections, basic.Text{
 		Content: "Colonies",
-		Style:   th.Text.Body.WithColor(colTextBright),
+		Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
 	})
 	if s.localRunner != nil {
-		for _, bs := range s.localRunner.BotSummaries() {
+		sums := s.localRunner.BotSummaries()
+		if len(sums) == 0 {
+			s.localRunner.RefreshSummaries()
+			sums = s.localRunner.BotSummaries()
+		}
+		for _, bs := range sums {
 			sections = append(sections, s.buildSB1ColonyCard(bs, th))
 		}
 	} else {
@@ -367,6 +373,8 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 		})
 	}
 
+	sections = append(sections, basic.Container{Color: colBorderDim, Height: 1})
+
 	// 2. Event Feed (Live) — collapsible
 	evArrow := "▾ "
 	if s.collapseEvents {
@@ -375,10 +383,10 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 	sections = append(sections, interact.GestureDetector{
 		OnTap: func() { s.SetState(func() { s.collapseEvents = !s.collapseEvents }) },
 		Child: basic.Container{
-			Padding: geom.Symmetric(2, 4),
+			Padding: geom.Symmetric(2, 2),
 			Child: basic.Text{
 				Content: evArrow + "Event Feed (Live)",
-				Style:   th.Text.Body.WithColor(colTextBright),
+				Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
 			},
 		},
 	})
@@ -437,11 +445,14 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 			})
 		}
 		sections = append(sections, basic.Column{
+			Size:     layout.MainMin,
 			Cross:    layout.CrossStretch,
 			Spacing:  3,
 			Children: evRows,
 		})
 	}
+
+	sections = append(sections, basic.Container{Color: colBorderDim, Height: 1})
 
 	// 3. Minimap (Empire) — collapsible 5x5 sector grid centered on s.snap.Room
 	mmArrow := "▾ "
@@ -451,10 +462,10 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 	sections = append(sections, interact.GestureDetector{
 		OnTap: func() { s.SetState(func() { s.collapseMinimap = !s.collapseMinimap }) },
 		Child: basic.Container{
-			Padding: geom.Symmetric(2, 4),
+			Padding: geom.Symmetric(2, 2),
 			Child: basic.Text{
 				Content: mmArrow + "Minimap (Empire)",
-				Style:   th.Text.Body.WithColor(colTextBright),
+				Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
 			},
 		},
 	})
@@ -463,13 +474,14 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 	}
 
 	return basic.SizedBox{
-		Width: 276,
+		Width: 288,
 		Child: basic.Container{
 			Color:   colBarBg,
 			Padding: geom.All(10),
 			Border:  paint.Stroke{Width: 1, Color: colBorderDim},
 			Child: basic.Scroll{
 				Child: basic.Column{
+					Size:     layout.MainMin,
 					Cross:    layout.CrossStretch,
 					Spacing:  theme.Space8,
 					Children: sections,
@@ -510,8 +522,9 @@ func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) cor
 		Radius:  7,
 		Border:  paint.Stroke{Width: 1, Color: bd},
 		Child: basic.Column{
+			Size:    layout.MainMin,
 			Cross:   layout.CrossStretch,
-			Spacing: 3,
+			Spacing: 4,
 			Children: []core.Widget{
 				basic.Row{
 					Cross: layout.CrossCenter,
@@ -519,12 +532,18 @@ func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) cor
 						basic.Expanded{
 							Child: basic.Text{
 								Content: bs.Username,
-								Style:   th.Text.Body.WithColor(colTextBright),
+								Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
 							},
 						},
-						basic.Text{
-							Content: fmt.Sprintf("RCL %d", bs.RCL),
-							Style:   th.Text.Caption.WithColor(colCyan),
+						basic.Container{
+							Color:   geom.Hex(0x14263d),
+							Padding: geom.Symmetric(6, 2),
+							Radius:  4,
+							Border:  paint.Stroke{Width: 1, Color: colPillIdleBd},
+							Child: basic.Text{
+								Content: fmt.Sprintf("RCL %d", bs.RCL),
+								Style:   th.Text.Caption.WithSize(10).WithColor(colCyan),
+							},
 						},
 					},
 				},
@@ -577,7 +596,10 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 			}
 			bg := geom.Hex(0x131d2b)
 			bd := colBorderDim
+			bdW := float32(1)
+			fg := colTextMuted
 			if owner := owners[rName]; owner != "" {
+				fg = colTextBright
 				if owner == primaryOwner {
 					bg = geom.Hex(0x16385c)
 					bd = colBorderFocus
@@ -588,6 +610,8 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 			}
 			if dx == 0 && dy == 0 {
 				bd = colCyan
+				bdW = 2
+				fg = colCyan
 			}
 			target := rName
 			cell := basic.Expanded{
@@ -599,14 +623,14 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 					},
 					Child: basic.Container{
 						Color:   bg,
-						Padding: geom.Symmetric(2, 6),
+						Padding: geom.Symmetric(1, 6),
 						Radius:  4,
-						Border:  paint.Stroke{Width: 1, Color: bd},
+						Border:  paint.Stroke{Width: bdW, Color: bd},
 						Child: basic.Align{
 							Alignment: layout.AlignCenter,
 							Child: basic.Text{
 								Content: rName,
-								Style:   th.Text.Caption.WithColor(colTextMuted),
+								Style:   th.Text.Caption.WithSize(9.5).WithMaxLines(1).WithColor(fg),
 							},
 						},
 					},
@@ -626,6 +650,7 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 		Radius:  7,
 		Border:  paint.Stroke{Width: 1, Color: colBorderDim},
 		Child: basic.Column{
+			Size:     layout.MainMin,
 			Cross:    layout.CrossStretch,
 			Spacing:  3,
 			Children: rows,
@@ -666,6 +691,7 @@ func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 					Radius:  6,
 					Border:  paint.Stroke{Width: 1, Color: geom.Hex(0x8c353d)},
 					Child: basic.Column{
+						Size:    layout.MainMin,
 						Cross:   layout.CrossStart,
 						Spacing: 4,
 						Children: []core.Widget{
@@ -674,6 +700,7 @@ func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 								Style:   th.Text.Caption.WithColor(geom.Hex(0xfca5a5)),
 							},
 							basic.Row{
+								Size:    layout.MainMin,
 								Cross:   layout.CrossCenter,
 								Spacing: 2,
 								Children: []core.Widget{
@@ -863,6 +890,7 @@ func (s *viewerState) buildFloatingSelectionCard(th *theme.Theme) core.Widget {
 			Radius:  8,
 			Border:  paint.Stroke{Width: 1, Color: colBorderFocus},
 			Child: basic.Column{
+				Size:     layout.MainMin,
 				Cross:    layout.CrossStretch,
 				Spacing:  6,
 				Children: rows,

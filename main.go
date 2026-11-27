@@ -45,7 +45,8 @@ var localSpeeds = []struct {
 	period time.Duration
 }{
 	{label: "1x", period: 250 * time.Millisecond},
-	{label: "4x", period: 60 * time.Millisecond},
+	{label: "2x", period: 125 * time.Millisecond},
+	{label: "5x", period: 50 * time.Millisecond},
 	{label: "10x", period: 25 * time.Millisecond},
 	{label: "25x", period: 10 * time.Millisecond},
 	{label: "Max", period: 1 * time.Millisecond},
@@ -425,6 +426,7 @@ func (s *viewerState) startLocalSim(ignoreSaved bool) {
 	s.simCancel = simCancel
 	s.localRunner = runner
 	s.provider = runner
+	runner.RefreshSummaries()
 	s.syncViewerState()
 	s.applySnapshot(runner.Snapshot())
 	runner.Start(simCtx, s.tickPeriod, s.onUpdate)
@@ -784,6 +786,7 @@ func (s *viewerState) buildHoverCard(th *theme.Theme) core.Widget {
 	}
 	rows := []core.Widget{
 		basic.Row{
+			Size:    layout.MainMin,
 			Cross:   layout.CrossCenter,
 			Spacing: theme.Space8,
 			Children: []core.Widget{
@@ -820,6 +823,7 @@ func (s *viewerState) buildHoverCard(th *theme.Theme) core.Widget {
 		Radius:  th.Radius.Control,
 		Border:  paint.Stroke{Width: 1, Color: geom.Hex(0x4fc3f7)},
 		Child: basic.Column{
+			Size:     layout.MainMin,
 			Cross:    layout.CrossStart,
 			Spacing:  2,
 			Children: rows,
@@ -1518,6 +1522,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 		Radius:  th.Radius.Control,
 		Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
 		Child: basic.Column{
+			Size:     layout.MainMin,
 			Cross:    layout.CrossStretch,
 			Spacing:  theme.Space4,
 			Children: children,
@@ -1579,6 +1584,7 @@ func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
 	var legend []core.Widget
 	for _, k := range keys {
 		legend = append(legend, basic.Row{
+			Size:    layout.MainMin,
 			Cross:   layout.CrossCenter,
 			Spacing: 3,
 			Children: []core.Widget{
@@ -1596,6 +1602,7 @@ func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
 	}
 
 	return basic.Column{
+		Size:    layout.MainMin,
 		Cross:   layout.CrossStretch,
 		Spacing: 4,
 		Children: []core.Widget{

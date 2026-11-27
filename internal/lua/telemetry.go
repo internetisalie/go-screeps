@@ -45,6 +45,13 @@ func (r *LocalRunner) BotSummaries() []BotSummary {
 	return out
 }
 
+// RefreshSummaries recomputes bot strategy summaries from current world and memory state.
+func (r *LocalRunner) RefreshSummaries() {
+	r.stepMu.Lock()
+	defer r.stepMu.Unlock()
+	r.refreshSummariesLocked()
+}
+
 // refreshSummariesLocked builds BotSummary snapshots for all bots (caller must hold r.stepMu).
 func (r *LocalRunner) refreshSummariesLocked() {
 	summaries := make([]BotSummary, 0, len(r.bots))
