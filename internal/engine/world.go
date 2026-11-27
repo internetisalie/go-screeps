@@ -2070,6 +2070,17 @@ func entityToRoomObject(e *Entity) screeps.RoomObject {
 		if e.SafeMode > 0 {
 			raw["safeMode"] = float64(e.SafeMode)
 		}
+		raw["safeModeAvailable"] = float64(e.SafeModeAvailable)
+		if e.SafeModeCooldown > 0 {
+			raw["safeModeCooldown"] = float64(e.SafeModeCooldown)
+		}
+		if e.ReservationUser != "" && e.ReservationEndTime > 0 {
+			raw["reservationUser"] = e.ReservationUser
+			raw["reservationEndTime"] = float64(e.ReservationEndTime)
+		}
+		if e.UpgradeBlocked > 0 {
+			raw["upgradeBlocked"] = float64(e.UpgradeBlocked)
+		}
 	case TYPE_CONSTRUCTION_SITE:
 		raw["structureType"] = e.StructureType
 		raw["progress"] = float64(e.Progress)

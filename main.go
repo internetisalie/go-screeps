@@ -106,6 +106,12 @@ type viewerState struct {
 	dragMoved bool
 	lastPos   geom.Offset
 	downPos   geom.Offset
+
+	// SB-1 & SB-2 UI state
+	zenMode          bool
+	followCam        bool
+	selectedStackIdx int
+	hoverRoom        string
 }
 
 func (v viewerApp) CreateState() core.State {
@@ -509,12 +515,25 @@ func (s *viewerState) applySnapshot(newSnap screeps.RoomSnapshot) {
 			if obj.ID == s.cam.FollowID {
 				s.cam.SelectedX = obj.X
 				s.cam.SelectedY = obj.Y
+				if s.followCam {
+					s.cam.CenterOnTile(obj.X, obj.Y)
+				}
 				found = true
 				break
 			}
 		}
 		if !found {
+			if s.followCam && s.localRunner != nil {
+				if nextRoom := s.localRunner.FindEntityRoom(s.cam.FollowID); nextRoom != "" && nextRoom != s.snap.Room {
+					followID := s.cam.FollowID
+					s.switchRoom(nextRoom)
+					s.cam.FollowID = followID
+					s.followCam = true
+					return
+				}
+			}
 			s.cam.FollowID = ""
+			s.followCam = false
 		}
 	}
 }
@@ -628,6 +647,21 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 			return
 		}
 		if !s.dragging {
+			// Live tile hover tracking for Hover Quick-Inspect card (UC-3.1).
+			if s.painter.LastSize.W > 0 {
+				hitRoom, gx, gy, ok := s.cam.ScreenToWorldTile(e.Pos, s.painter.LastSize, &s.snap, s.painter.Neighbors)
+				if !ok || (hitRoom != "" && hitRoom != s.snap.Room) {
+					gx, gy, hitRoom = -1, -1, ""
+				}
+				if gx != s.cam.HoverX || gy != s.cam.HoverY || hitRoom != s.hoverRoom {
+					s.SetState(func() {
+						s.cam.HoverX = gx
+						s.cam.HoverY = gy
+						s.hoverRoom = hitRoom
+					})
+					s.signal.Notify()
+				}
+			}
 			return
 		}
 		dx := e.Pos.X - s.lastPos.X
@@ -652,7 +686,9 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 				s.SetState(func() {
 					s.cam.SelectedX = gx
 					s.cam.SelectedY = gy
+					s.selectedStackIdx = 0
 					s.cam.FollowID = ""
+					s.followCam = false
 					for _, obj := range s.snap.Objects {
 						if obj.X == gx && obj.Y == gy && (obj.Type == "creep" || obj.Type == "powerCreep") {
 							s.cam.FollowID = obj.ID
@@ -720,22 +756,43 @@ func (s *viewerState) Build(ctx core.BuildContext) core.Widget {
 	if s.tickPeriod > 0 {
 		tps = 1.0 / s.tickPeriod.Seconds()
 	}
-	visLabel := "Vis: On"
-	if !s.painter.ShowVisuals {
-		visLabel = "Vis: Off"
-	}
 
 	headerChildren := []core.Widget{
-		basic.Text{
-			Content: "Screeps",
-			Style:   th.Text.Body.WithColor(th.Color.Ink),
+		basic.Container{
+			Color:   geom.Hex(0x162436),
+			Padding: geom.Symmetric(7, 2),
+			Radius:  th.Radius.Control,
+			Border:  paint.Stroke{Width: 1, Color: geom.Hex(0x2d4b6e)},
+			Child: basic.Text{
+				Content: s.snap.Room,
+				Style:   th.Text.Caption.WithColor(geom.Hex(0x4fc3f7)),
+			},
 		},
 		basic.Text{
-			Content: fmt.Sprintf("t%d (%.1f/s) • %d objs • %.0f%% • %.0f°", s.snap.GameTime, tps, len(s.snap.Objects), s.cam.Zoom*100, float64(s.cam.YawRadians())*180/math.Pi),
+			Content: fmt.Sprintf("Tick %d • %.1f/s • %.0f%% • %.0f°", s.snap.GameTime, tps, s.cam.Zoom*100, float64(s.cam.YawRadians())*180/math.Pi),
 			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
 		},
-		basic.Expanded{Child: basic.SizedBox{}},
 	}
+	if s.localRunner != nil {
+		emp := s.localRunner.EmpireStats()
+		pct := 0
+		if emp.GCLTotal > 0 {
+			pct = (emp.GCLProgress * 100) / emp.GCLTotal
+		}
+		headerChildren = append(headerChildren,
+			basic.Container{
+				Color:   th.Color.Canvas,
+				Padding: geom.Symmetric(7, 2),
+				Radius:  th.Radius.Control,
+				Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
+				Child: basic.Text{
+					Content: fmt.Sprintf("GCL %d (%d%%) • Colonies %d • Rooms %d • Creeps %d", emp.GCLLevel, pct, emp.Colonies, emp.Rooms, emp.Creeps),
+					Style:   th.Text.Caption.WithColor(geom.Hex(0x80deea)),
+				},
+			},
+		)
+	}
+	headerChildren = append(headerChildren, basic.Expanded{Child: basic.SizedBox{}})
 	if s.localRunner != nil {
 		pauseLabel := "Pause"
 		pauseIcon := iconPause()
@@ -806,13 +863,16 @@ func (s *viewerState) Build(ctx core.BuildContext) core.Widget {
 			},
 		)
 	}
+	zenLabel := "Zen"
+	if s.zenMode {
+		zenLabel = "Exit Zen"
+	}
 	headerChildren = append(headerChildren,
 		control.Button{
-			Label: visLabel,
+			Label: zenLabel,
 			Size:  control.ButtonSmall,
 			OnPress: func() {
-				s.SetState(func() { s.painter.ShowVisuals = !s.painter.ShowVisuals })
-				s.signal.Notify()
+				s.SetState(func() { s.zenMode = !s.zenMode })
 			},
 		},
 		overlay.Tooltip{
@@ -888,46 +948,257 @@ func (s *viewerState) Build(ctx core.BuildContext) core.Widget {
 		},
 	}
 
-	viewport := interact.Listener{
-		OnPointer: s.handlePointer,
-		Child:     control.CustomPaint{Painter: s.painter, Repaint: &s.signal},
+	layerToggle := func(label string, active bool, toggle func()) core.Widget {
+		lbl := label
+		if active {
+			lbl = "● " + label
+		} else {
+			lbl = "○ " + label
+		}
+		return control.Button{
+			Label:   lbl,
+			Size:    control.ButtonSmall,
+			OnPress: toggle,
+		}
 	}
-
-	inspector := basic.SizedBox{
-		Width: 320,
-		Child: basic.Container{
-			Color:   th.Color.Card,
-			Padding: geom.All(theme.Space12),
-			Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
-			Child:   basic.Scroll{Child: s.buildInspector(th)},
+	layerChildren := []core.Widget{
+		basic.Text{
+			Content: "Layers:",
+			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
 		},
+		layerToggle("Visuals", s.painter.ShowVisuals, func() {
+			s.SetState(func() { s.painter.ShowVisuals = !s.painter.ShowVisuals })
+			s.signal.Notify()
+		}),
+		layerToggle("Beams", !s.painter.HideBeams, func() {
+			s.SetState(func() { s.painter.HideBeams = !s.painter.HideBeams })
+			s.signal.Notify()
+		}),
+		layerToggle("HP Bars", !s.painter.HideHPBars, func() {
+			s.SetState(func() { s.painter.HideHPBars = !s.painter.HideHPBars })
+			s.signal.Notify()
+		}),
+		layerToggle("Grid", s.painter.ShowGrid, func() {
+			s.SetState(func() { s.painter.ShowGrid = !s.painter.ShowGrid })
+			s.signal.Notify()
+		}),
+		layerToggle("Tower DPS", s.painter.ShowTowerDPS, func() {
+			s.SetState(func() { s.painter.ShowTowerDPS = !s.painter.ShowTowerDPS })
+			s.signal.Notify()
+		}),
 	}
-
-	return basic.Column{
-		Cross: layout.CrossStretch,
-		Children: []core.Widget{
-			header,
-			basic.Expanded{
-				Child: basic.Row{
-					Cross: layout.CrossStretch,
-					Children: []core.Widget{
-						basic.Expanded{Child: viewport},
-						inspector,
-					},
+	if s.painter.ShowTowerDPS {
+		layerChildren = append(layerChildren,
+			basic.Expanded{Child: basic.SizedBox{}},
+			basic.Container{
+				Color:   geom.Hex(0x2a1418),
+				Padding: geom.Symmetric(7, 2),
+				Radius:  th.Radius.Control,
+				Border:  paint.Stroke{Width: 1, Color: geom.Hex(0xef5350)},
+				Child: basic.Text{
+					Content: "Tower DPS: 600 (r≤5) • 450 (r≤10) • 300 (r≤15) • 150 (r≥20)",
+					Style:   th.Text.Caption.WithColor(geom.Hex(0xffab91)),
 				},
 			},
+		)
+	}
+	layerBar := basic.Container{
+		Color:   th.Color.Canvas,
+		Padding: geom.Symmetric(theme.Space8, 3),
+		Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
+		Child: basic.Row{
+			Cross:    layout.CrossCenter,
+			Spacing:  theme.Space4,
+			Children: layerChildren,
 		},
 	}
+
+	viewportLayers := []core.Widget{
+		interact.Listener{
+			OnPointer: s.handlePointer,
+			Child:     control.CustomPaint{Painter: s.painter, Repaint: &s.signal},
+		},
+	}
+	if hoverCard := s.buildHoverCard(th); hoverCard != nil {
+		viewportLayers = append(viewportLayers, basic.Align{
+			Alignment: layout.AlignBottomLeft,
+			Child: basic.Container{
+				Padding: geom.All(theme.Space12),
+				Child:   hoverCard,
+			},
+		})
+	}
+	viewport := basic.Stack{Children: viewportLayers}
+
+	bodyChildren := []core.Widget{
+		basic.Expanded{Child: viewport},
+	}
+	if !s.zenMode {
+		inspector := basic.SizedBox{
+			Width: 336,
+			Child: basic.Container{
+				Color:   th.Color.Card,
+				Padding: geom.All(theme.Space12),
+				Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
+				Child:   basic.Scroll{Child: s.buildInspector(th)},
+			},
+		}
+		bodyChildren = append(bodyChildren, inspector)
+	}
+
+	rootChildren := []core.Widget{header}
+	if !s.zenMode {
+		rootChildren = append(rootChildren, layerBar)
+	}
+	rootChildren = append(rootChildren, basic.Expanded{
+		Child: basic.Row{
+			Cross:    layout.CrossStretch,
+			Children: bodyChildren,
+		},
+	})
+
+	return basic.Column{
+		Cross:    layout.CrossStretch,
+		Children: rootChildren,
+	}
+}
+
+func (s *viewerState) buildHoverCard(th *theme.Theme) core.Widget {
+	if s.cam.HoverX < 0 || s.cam.HoverY < 0 || s.cam.HoverX >= iso.GridSize || s.cam.HoverY >= iso.GridSize {
+		return nil
+	}
+	var objs []screeps.RoomObject
+	for _, obj := range s.snap.Objects {
+		if obj.X == s.cam.HoverX && obj.Y == s.cam.HoverY {
+			objs = append(objs, obj)
+		}
+	}
+	if len(objs) == 0 {
+		return nil
+	}
+	sort.Slice(objs, func(i, j int) bool {
+		return entityInspectPriority(objs[i].Type) < entityInspectPriority(objs[j].Type)
+	})
+	top := objs[0]
+	title := top.Name
+	if title == "" {
+		title = strings.ToUpper(top.Type)
+	}
+	owner := "Neutral"
+	if top.User != "" {
+		owner = top.User
+		if u, ok := s.snap.Users[top.User]; ok && u != "" {
+			owner = u
+		}
+	}
+	rows := []core.Widget{
+		basic.Row{
+			Cross:   layout.CrossCenter,
+			Spacing: theme.Space8,
+			Children: []core.Widget{
+				basic.Text{Content: title, Style: th.Text.Body.WithColor(th.Color.Ink)},
+				basic.Text{Content: fmt.Sprintf("(%d, %d)", s.cam.HoverX, s.cam.HoverY), Style: th.Text.Caption.WithColor(th.Color.Ink2)},
+			},
+		},
+		basic.Text{
+			Content: fmt.Sprintf("%s • %s", top.Type, owner),
+			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+		},
+	}
+	if top.HitsMax > 0 {
+		rows = append(rows, basic.Text{
+			Content: fmt.Sprintf("HP %d / %d", top.Hits, top.HitsMax),
+			Style:   th.Text.Caption.WithColor(geom.Hex(0x66bb6a)),
+		})
+	}
+	if act := formatActionLog(top); act != "" {
+		rows = append(rows, basic.Text{
+			Content: act,
+			Style:   th.Text.Caption.WithColor(geom.Hex(0x4fc3f7)),
+		})
+	}
+	if len(objs) > 1 {
+		rows = append(rows, basic.Text{
+			Content: fmt.Sprintf("+%d more on tile • Click to inspect", len(objs)-1),
+			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+		})
+	}
+	return basic.Container{
+		Color:   geom.Hex(0x131b26),
+		Padding: geom.All(theme.Space8),
+		Radius:  th.Radius.Control,
+		Border:  paint.Stroke{Width: 1, Color: geom.Hex(0x4fc3f7)},
+		Child: basic.Column{
+			Cross:    layout.CrossStart,
+			Spacing:  2,
+			Children: rows,
+		},
+	}
+}
+
+func entityInspectPriority(typ string) int {
+	switch typ {
+	case "creep", "powerCreep":
+		return 0
+	case "spawn":
+		return 1
+	case "controller":
+		return 2
+	case "tower":
+		return 3
+	case "storage", "terminal", "link", "extractor", "extension", "container":
+		return 4
+	case "source", "mineral":
+		return 5
+	case "tombstone", "resource":
+		return 6
+	case "constructionSite":
+		return 7
+	case "rampart", "constructedWall":
+		return 8
+	case "road":
+		return 9
+	default:
+		return 10
+	}
+}
+
+func formatActionLog(obj screeps.RoomObject) string {
+	if obj.Raw == nil {
+		return ""
+	}
+	al, ok := obj.Raw["actionLog"].(map[string]any)
+	if !ok || len(al) == 0 {
+		return ""
+	}
+	for _, key := range []string{"attack", "rangedAttack", "rangedMassAttack", "dismantle", "heal", "rangedHeal", "harvest", "build", "repair", "upgradeController", "claimController", "reserveController", "attackController", "transfer", "withdraw"} {
+		raw, exists := al[key]
+		if !exists || raw == nil {
+			continue
+		}
+		if m, ok := raw.(map[string]any); ok {
+			tx, okX := intField(m, "x")
+			ty, okY := intField(m, "y")
+			if okX && okY {
+				return fmt.Sprintf("Action: %s → (%d, %d)", key, tx, ty)
+			}
+		}
+		return "Action: " + key
+	}
+	return ""
 }
 
 func (s *viewerState) selectAndCenter(obj screeps.RoomObject, follow bool) {
 	s.SetState(func() {
 		s.cam.SelectedX = obj.X
 		s.cam.SelectedY = obj.Y
+		s.selectedStackIdx = 0
 		if follow {
 			s.cam.FollowID = obj.ID
+			s.followCam = true
 		} else {
 			s.cam.FollowID = ""
+			s.followCam = false
 		}
 		s.cam.CenterOnTile(obj.X, obj.Y)
 	})
@@ -1017,15 +1288,15 @@ func (s *viewerState) buildInspector(th *theme.Theme) core.Widget {
 			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
 		})
 	} else {
-		terrainName := "plain"
+		terrainName, moveCost := "plain", 2
 		if len(s.snap.Terrain) >= iso.GridSize*iso.GridSize {
 			switch s.snap.Terrain[s.cam.SelectedY*iso.GridSize+s.cam.SelectedX] {
 			case '1':
-				terrainName = "wall"
+				terrainName, moveCost = "wall", 255
 			case '2':
-				terrainName = "swamp"
+				terrainName, moveCost = "swamp", 10
 			case '3':
-				terrainName = "wall+swamp"
+				terrainName, moveCost = "wall+swamp", 255
 			}
 		}
 		exitTag := ""
@@ -1040,23 +1311,10 @@ func (s *viewerState) buildInspector(th *theme.Theme) core.Widget {
 			exitTag += " [S-Exit]"
 		}
 
-		followTag := ""
-		if s.cam.FollowID != "" {
-			followTag = " [Tracking Creep]"
-		}
 		lines = append(lines, basic.Text{
-			Content: fmt.Sprintf("Tile (%d, %d) • %s%s%s", s.cam.SelectedX, s.cam.SelectedY, terrainName, exitTag, followTag),
+			Content: fmt.Sprintf("Location %s (%d, %d) • %s (cost %d)%s", s.snap.Room, s.cam.SelectedX, s.cam.SelectedY, terrainName, moveCost, exitTag),
 			Style:   th.Text.Body.WithColor(th.Color.Accent),
 		})
-		if s.cam.FollowID != "" {
-			lines = append(lines, control.Button{
-				Label: "Stop Tracking",
-				Size:  control.ButtonSmall,
-				OnPress: func() {
-					s.SetState(func() { s.cam.FollowID = "" })
-				},
-			})
-		}
 
 		var tileObjs []screeps.RoomObject
 		for _, obj := range s.snap.Objects {
@@ -1065,18 +1323,74 @@ func (s *viewerState) buildInspector(th *theme.Theme) core.Widget {
 			}
 		}
 		sort.Slice(tileObjs, func(i, j int) bool {
-			if tileObjs[i].Type != tileObjs[j].Type {
-				return tileObjs[i].Type < tileObjs[j].Type
+			pi, pj := entityInspectPriority(tileObjs[i].Type), entityInspectPriority(tileObjs[j].Type)
+			if pi != pj {
+				return pi < pj
 			}
 			if tileObjs[i].Name != tileObjs[j].Name {
 				return tileObjs[i].Name < tileObjs[j].Name
 			}
 			return tileObjs[i].ID < tileObjs[j].ID
 		})
-		for _, obj := range tileObjs {
-			lines = append(lines, buildObjectCard(obj, s.snap.Users, s.snap.GameTime, th))
-		}
-		if len(tileObjs) == 0 {
+		if len(tileObjs) > 0 {
+			if s.selectedStackIdx < 0 || s.selectedStackIdx >= len(tileObjs) {
+				s.selectedStackIdx = 0
+			}
+			// Stacked entity disambiguation pills (UC-3.2).
+			if len(tileObjs) > 1 {
+				var tabs []core.Widget
+				for idx, obj := range tileObjs {
+					i := idx
+					lbl := obj.Type
+					if obj.Name != "" {
+						lbl = obj.Name
+					}
+					if i == s.selectedStackIdx {
+						lbl = "● " + lbl
+					}
+					tabs = append(tabs, control.Button{
+						Label: lbl,
+						Size:  control.ButtonSmall,
+						OnPress: func() {
+							s.SetState(func() { s.selectedStackIdx = i })
+						},
+					})
+				}
+				lines = append(lines, basic.Wrap{
+					Spacing:    theme.Space4,
+					RunSpacing: theme.Space4,
+					Children:   tabs,
+				})
+			}
+
+			selObj := tileObjs[s.selectedStackIdx]
+			if selObj.Type == "creep" || selObj.Type == "powerCreep" {
+				followLbl := "Follow Creep"
+				if s.followCam && s.cam.FollowID == selObj.ID {
+					followLbl = "● Following (Stop)"
+				}
+				targetID := selObj.ID
+				lines = append(lines, control.Button{
+					Label: followLbl,
+					Size:  control.ButtonSmall,
+					OnPress: func() {
+						s.SetState(func() {
+							if s.followCam && s.cam.FollowID == targetID {
+								s.followCam = false
+							} else {
+								s.cam.FollowID = targetID
+								s.followCam = true
+							}
+						})
+					},
+				})
+			}
+			var creepMem string
+			if s.localRunner != nil && (selObj.Type == "creep" || selObj.Type == "powerCreep") {
+				creepMem = s.localRunner.CreepMemoryJSON(selObj.User, selObj.Name)
+			}
+			lines = append(lines, buildObjectCard(selObj, s.snap.Users, s.snap.GameTime, creepMem, th))
+		} else {
 			lines = append(lines, basic.Text{
 				Content: "No objects on this tile.",
 				Style:   th.Text.Caption.WithColor(th.Color.Ink2),
@@ -1303,7 +1617,7 @@ func (s *viewerState) buildBotBrainCard(bs lua.BotSummary, th *theme.Theme) core
 	}
 }
 
-func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime int64, th *theme.Theme) core.Widget {
+func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime int64, creepMemJSON string, th *theme.Theme) core.Widget {
 	// 1. Static Identity & Specs
 	staticRows := []core.Widget{
 		basic.Row{
@@ -1397,6 +1711,31 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			rem := max(0, dg-int(gameTime))
 			dynRows = append(dynRows, metricBar(fmt.Sprintf("Downgrade  %d ticks", rem), rem, 20000, geom.Hex(0x78909c), th))
 		}
+		if sm, ok := intField(obj.Raw, "safeMode"); ok && int64(sm) > gameTime {
+			rem := sm - int(gameTime)
+			dynRows = append(dynRows, metricBar(fmt.Sprintf("Safe Mode ACTIVE  %d ticks", rem), rem, 20000, geom.Hex(0x66bb6a), th))
+		} else if smAvail, ok := intField(obj.Raw, "safeModeAvailable"); ok {
+			dynRows = append(dynRows, basic.Text{
+				Content: fmt.Sprintf("Safe Mode Available: %d", smAvail),
+				Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+			})
+		}
+		if resUser, ok := obj.Raw["reservationUser"].(string); ok && resUser != "" {
+			if resEnd, ok2 := intField(obj.Raw, "reservationEndTime"); ok2 && int64(resEnd) > gameTime {
+				resOwner := resUser
+				if u, ok3 := users[resUser]; ok3 && u != "" {
+					resOwner = u
+				}
+				rem := resEnd - int(gameTime)
+				dynRows = append(dynRows, metricBar(fmt.Sprintf("Reserved by %s  %d ticks", resOwner, rem), rem, 5000, geom.Hex(0x26c6da), th))
+			}
+		}
+		if ub, ok := intField(obj.Raw, "upgradeBlocked"); ok && int64(ub) > gameTime {
+			dynRows = append(dynRows, basic.Text{
+				Content: fmt.Sprintf("Upgrade Blocked: %d ticks", ub-int(gameTime)),
+				Style:   th.Text.Caption.WithColor(geom.Hex(0xff5252)),
+			})
+		}
 	case "source":
 		cap, _ := intField(obj.Raw, "energyCapacity")
 		if cap > 0 {
@@ -1426,6 +1765,24 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 		}
 		fat, _ := intField(obj.Raw, "fatigue")
 		dynRows = append(dynRows, metricBar(fmt.Sprintf("Fatigue  %d", fat), min(fat, 50), 50, geom.Hex(0xffa726), th))
+		if act := formatActionLog(obj); act != "" {
+			dynRows = append(dynRows, basic.Text{
+				Content: act,
+				Style:   th.Text.Caption.WithColor(geom.Hex(0x4fc3f7)),
+			})
+		}
+		if creepMemJSON != "" {
+			dynRows = append(dynRows, basic.Container{
+				Color:   th.Color.Card,
+				Padding: geom.All(theme.Space4),
+				Radius:  th.Radius.Control,
+				Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
+				Child: basic.Text{
+					Content: "Memory: " + creepMemJSON,
+					Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+				},
+			})
+		}
 	}
 
 	if len(obj.Store) > 0 {

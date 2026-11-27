@@ -2,6 +2,7 @@ package lua
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log"
@@ -9,9 +10,21 @@ import (
 	"sync"
 	"time"
 
+	rt "github.com/arnodel/golua/runtime"
+
 	"go-screeps/internal/engine"
 	"go-screeps/internal/screeps"
 )
+
+// EmpireStats holds high-level telemetry for the top Empire bar (UC-4.2).
+type EmpireStats struct {
+	Colonies    int
+	Rooms       int
+	Creeps      int
+	GCLLevel    int
+	GCLProgress int
+	GCLTotal    int
+}
 
 // LocalRunner orchestrates an engine.World and one or more sandboxed Lua BotVMs.
 type LocalRunner struct {
@@ -376,6 +389,91 @@ func (r *LocalRunner) SwitchRoom(room string) {
 	r.stateMu.Lock()
 	r.activeRoom = strings.ToUpper(strings.TrimSpace(room))
 	r.stateMu.Unlock()
+}
+
+// EmpireStats returns high-level colony, room, creep, and primary bot GCL telemetry.
+func (r *LocalRunner) EmpireStats() EmpireStats {
+	r.stepMu.Lock()
+	var primaryUser string
+	colonies := len(r.bots)
+	if len(r.bots) > 0 {
+		primaryUser = r.bots[0].UserID
+	}
+	r.stepMu.Unlock()
+
+	r.world.RLock()
+	defer r.world.RUnlock()
+
+	st := EmpireStats{
+		Colonies: colonies,
+		Rooms:    len(r.world.Rooms),
+		GCLLevel: 1,
+		GCLTotal: engine.GCL_MULTIPLY,
+	}
+	for _, rm := range r.world.Rooms {
+		for _, e := range rm.Entities {
+			if e.Type == engine.TYPE_CREEP {
+				st.Creeps++
+			}
+		}
+	}
+	if primaryUser != "" {
+		st.GCLLevel, st.GCLProgress, st.GCLTotal = r.world.UserGCLInfoLocked(primaryUser)
+	}
+	return st
+}
+
+// FindEntityRoom returns the room name currently containing entityID (used for cross-room creep following).
+func (r *LocalRunner) FindEntityRoom(entityID string) string {
+	if entityID == "" {
+		return ""
+	}
+	r.world.RLock()
+	defer r.world.RUnlock()
+	for name, rm := range r.world.Rooms {
+		if _, ok := rm.Entities[entityID]; ok {
+			return name
+		}
+	}
+	return ""
+}
+
+// CreepMemoryJSON returns a compact JSON representation of Memory.creeps[creepName] for userID.
+func (r *LocalRunner) CreepMemoryJSON(userID, creepName string) string {
+	if userID == "" || creepName == "" {
+		return ""
+	}
+	r.stepMu.Lock()
+	defer r.stepMu.Unlock()
+	for _, vm := range r.bots {
+		if vm.UserID != userID {
+			continue
+		}
+		memTbl, ok := vm.screepsMod.Get(rt.StringValue("Memory")).TryTable()
+		if !ok {
+			return ""
+		}
+		creepsTbl, ok := memTbl.Get(rt.StringValue("creeps")).TryTable()
+		if !ok {
+			return ""
+		}
+		cmVal := creepsTbl.Get(rt.StringValue(creepName))
+		if cmVal.IsNil() {
+			return ""
+		}
+		visited := make(map[*rt.Table]bool)
+		budget := 256
+		goVal, ok := luaValueToGo(cmVal, visited, 0, &budget)
+		if !ok {
+			return ""
+		}
+		raw, err := json.Marshal(goVal)
+		if err != nil {
+			return ""
+		}
+		return string(raw)
+	}
+	return ""
 }
 
 // Snapshot returns an immutable RoomSnapshot of the currently active room.

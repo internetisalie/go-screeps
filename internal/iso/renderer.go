@@ -31,6 +31,8 @@ type Camera struct {
 	Yaw       float32 // continuous rotation in radians [0, 2*pi); 0=0°, pi/2=90°, etc.
 	SelectedX int
 	SelectedY int
+	HoverX    int
+	HoverY    int
 	FollowID  string
 	Fitted    bool
 }
@@ -103,6 +105,8 @@ func NewCamera() Camera {
 		Zoom:      1.0,
 		SelectedX: -1,
 		SelectedY: -1,
+		HoverX:    -1,
+		HoverY:    -1,
 	}
 }
 
@@ -594,8 +598,12 @@ type Painter struct {
 	Neighbors   []*screeps.RoomSnapshot // optional; when populated, renders multi-room neighborhood
 	Cam         *Camera
 	CreepPos    map[string][2]float32 // interpolated (x, y) per creep ID
-	ShowVisuals bool
-	LastSize       geom.Size
+	ShowVisuals  bool
+	HideBeams    bool
+	HideHPBars   bool
+	ShowGrid     bool
+	ShowTowerDPS bool
+	LastSize     geom.Size
 	groundLayer    paint.Layer
 	groundKey      groundCacheKey
 	groundValid    bool
@@ -1185,7 +1193,107 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 		renderStaticTerrainAndWalls(cv, false)
 	}
 
-	// Pass 1b: Dynamic ground overlays (selection, layered sci-fi curb-lit roads, ramparts, construction sites)
+	// Pass 1b: Dynamic ground overlays (grid, Tower DPS rings, hover/selection, roads, ramparts, construction sites)
+	if p.ShowGrid {
+		step := 5
+		if cam.Zoom >= 1.25 {
+			step = 1
+		}
+		for i := 0; i <= GridSize; i += step {
+			alpha := float32(0.10)
+			if i%5 == 0 {
+				alpha = 0.22
+			}
+			col := hexAlpha(0x4fc3f7, alpha)
+			// Vertical grid line x = i - 0.5
+			x0, y0 := rotateYawF(float32(i)-0.5, -0.5, cosY, sinY)
+			x1, y1 := rotateYawF(float32(i)-0.5, float32(GridSize)-0.5, cosY, sinY)
+			path.Reset()
+			path.MoveTo(originX+(x0-y0)*halfW, originY+(x0+y0)*halfH)
+			path.LineTo(originX+(x1-y1)*halfW, originY+(x1+y1)*halfH)
+			cv.DrawPath(&path, paint.Paint{Stroke: &paint.Stroke{Width: 0.75, Color: col}})
+
+			// Horizontal grid line y = i - 0.5
+			x2, y2 := rotateYawF(-0.5, float32(i)-0.5, cosY, sinY)
+			x3, y3 := rotateYawF(float32(GridSize)-0.5, float32(i)-0.5, cosY, sinY)
+			path.Reset()
+			path.MoveTo(originX+(x2-y2)*halfW, originY+(x2+y2)*halfH)
+			path.LineTo(originX+(x3-y3)*halfW, originY+(x3+y3)*halfH)
+			cv.DrawPath(&path, paint.Paint{Stroke: &paint.Stroke{Width: 0.75, Color: col}})
+		}
+	}
+
+	if p.ShowTowerDPS {
+		type dpsZone struct {
+			radius float32
+			hex    uint32
+			fillA  float32
+			lineA  float32
+		}
+		zones := []dpsZone{
+			{20.5, 0x66bb6a, 0.04, 0.28},
+			{15.5, 0xffca28, 0.05, 0.34},
+			{10.5, 0xff9800, 0.07, 0.42},
+			{5.5, 0xef5350, 0.12, 0.65},
+		}
+		for _, r := range visRooms {
+			for _, obj := range r.snap.Objects {
+				if obj.Type != "tower" {
+					continue
+				}
+				tx := float32(r.offX + obj.X)
+				ty := float32(r.offY + obj.Y)
+				for _, z := range zones {
+					corners := [4][2]float32{
+						{tx - z.radius, ty - z.radius},
+						{tx + z.radius, ty - z.radius},
+						{tx + z.radius, ty + z.radius},
+						{tx - z.radius, ty + z.radius},
+					}
+					path.Reset()
+					for i, c := range corners {
+						rx, ry := rotateYawF(c[0], c[1], cosY, sinY)
+						px := originX + (rx-ry)*halfW
+						py := originY + (rx+ry)*halfH
+						if i == 0 {
+							path.MoveTo(px, py)
+						} else {
+							path.LineTo(px, py)
+						}
+					}
+					path.Close()
+					cv.DrawPath(&path, paint.Paint{Color: hexAlpha(z.hex, z.fillA)})
+					cv.DrawPath(&path, paint.Paint{Stroke: &paint.Stroke{Width: 1.1, Color: hexAlpha(z.hex, z.lineA)}})
+				}
+			}
+		}
+	}
+
+	if cam.HoverX >= 0 && cam.HoverX < GridSize && cam.HoverY >= 0 && cam.HoverY < GridSize &&
+		!(cam.HoverX == cam.SelectedX && cam.HoverY == cam.SelectedY) {
+		hx, hy := float32(cam.HoverX), float32(cam.HoverY)
+		corners := [4][2]float32{
+			{hx - 0.5, hy - 0.5},
+			{hx + 0.5, hy - 0.5},
+			{hx + 0.5, hy + 0.5},
+			{hx - 0.5, hy + 0.5},
+		}
+		path.Reset()
+		for i, c := range corners {
+			rx, ry := rotateYawF(c[0], c[1], cosY, sinY)
+			px := originX + (rx-ry)*halfW
+			py := originY + (rx+ry)*halfH
+			if i == 0 {
+				path.MoveTo(px, py)
+			} else {
+				path.LineTo(px, py)
+			}
+		}
+		path.Close()
+		cv.DrawPath(&path, paint.Paint{Color: hexAlpha(0x80deea, 0.14)})
+		cv.DrawPath(&path, paint.Paint{Stroke: &paint.Stroke{Width: 1.0, Color: hexAlpha(0x80deea, 0.65)}})
+	}
+
 	if cam.SelectedX >= 0 && cam.SelectedX < GridSize && cam.SelectedY >= 0 && cam.SelectedY < GridSize {
 		sx, sy := float32(cam.SelectedX), float32(cam.SelectedY)
 		corners := [4][2]float32{
@@ -1284,7 +1392,7 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 					}
 				}
 			} else {
-				drawObject(cv, &path, cx, cy, halfW, halfH, cam.Zoom, objCos, objSin, animDur, animSec, obj)
+				drawObject(cv, &path, cx, cy, halfW, halfH, cam.Zoom, objCos, objSin, animDur, animSec, obj, !p.HideHPBars)
 			}
 		}
 	}
@@ -1455,7 +1563,7 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 			}
 			facing := p.resolveUnitFacing(c.obj, c.fx, c.fy, c.gfx, c.gfy)
 			cYaw := objYaw + facing
-			drawObject(cv, &path, it.cx, it.cy-stackH, halfW, halfH, cam.Zoom, float32(math.Cos(cYaw)), float32(math.Sin(cYaw)), animDur, animSec, c.obj)
+			drawObject(cv, &path, it.cx, it.cy-stackH, halfW, halfH, cam.Zoom, float32(math.Cos(cYaw)), float32(math.Sin(cYaw)), animDur, animSec, c.obj, !p.HideHPBars)
 			continue
 		}
 		if objs, ok := it.r.byTile[it.y*GridSize+it.x]; ok {
@@ -1471,7 +1579,7 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 						oCos, oSin = float32(math.Cos(tYaw)), float32(math.Sin(tYaw))
 					}
 				}
-				drawObject(cv, &path, it.cx, it.cy-stackH, halfW, halfH, cam.Zoom, oCos, oSin, animDur, animSec, obj)
+				drawObject(cv, &path, it.cx, it.cy-stackH, halfW, halfH, cam.Zoom, oCos, oSin, animDur, animSec, obj, !p.HideHPBars)
 				if h, _ := objectBoxMetrics(obj.Type, cam.Zoom); h > 0 {
 					stackH += h * 0.65
 				}
@@ -1494,6 +1602,7 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 	}
 
 	// Pass 3: Action beams (harvest, upgrade, build, repair, attack, heal)
+	if !p.HideBeams {
 	for _, r := range visRooms {
 		for _, obj := range r.snap.Objects {
 			if obj.Raw == nil {
@@ -1515,6 +1624,7 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 
 			drawActionBeam(cv, &path, scx, scy, originX, originY, halfW, halfH, cam.Zoom, cosY, sinY, r.offX, r.offY, r.byTile, al)
 		}
+	}
 	}
 
 	// Pass 4: RoomVisual overlay (if enabled)
@@ -1887,7 +1997,7 @@ func sdfObjectKind(typ string) (kind float32, padX, padTop, padBot float32, ok b
 	}
 }
 
-func drawObject(cv *paint.Canvas, p *paint.Path, cx, cy, hw, hh, z, cosY, sinY float32, animDur time.Duration, animSec float32, obj screeps.RoomObject) {
+func drawObject(cv *paint.Canvas, p *paint.Path, cx, cy, hw, hh, z, cosY, sinY float32, animDur time.Duration, animSec float32, obj screeps.RoomObject, showHP bool) {
 	if obj.Type == "road" {
 		drawIsoEllipse(cv, p, cx, cy, hw*0.36, hh*0.36, geom.Hex(0x4b515d), nil)
 		return
@@ -1992,7 +2102,7 @@ func drawObject(cv *paint.Canvas, p *paint.Path, cx, cy, hw, hh, z, cosY, sinY f
 			})
 
 			// Crisp HP bar above damaged creeps
-			if (obj.Type == "creep" || obj.Type == "powerCreep") && obj.HitsMax > 0 && obj.Hits < obj.HitsMax {
+			if showHP && (obj.Type == "creep" || obj.Type == "powerCreep") && obj.HitsMax > 0 && obj.Hits < obj.HitsMax {
 				h, _ := objectBoxMetrics(obj.Type, z)
 				ratio := geom.Clamp32(float32(obj.Hits)/float32(obj.HitsMax), 0, 1)
 				barW := hw * 1.1
