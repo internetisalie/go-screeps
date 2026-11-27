@@ -1497,6 +1497,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			dynRows = append(dynRows, metricBar(fmt.Sprintf("Fatigue  %d", fat), min(fat, 50), 50, geom.Hex(0xffa726), th))
 		}
 		if act := formatActionLog(obj); act != "" {
+			actVal := strings.TrimPrefix(act, "Action: ")
 			dynRows = append(dynRows, basic.Row{
 				Size:    layout.MainMin,
 				Cross:   layout.CrossCenter,
@@ -1508,7 +1509,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 					},
 					basic.Expanded{
 						Child: basic.Text{
-							Content: act,
+							Content: actVal,
 							Style:   th.Text.Caption.WithColor(colCyan),
 						},
 					},
