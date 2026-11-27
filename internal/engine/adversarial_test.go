@@ -265,3 +265,87 @@ func TestImportStateClearsEventsAndAdvancesNextID(t *testing.T) {
 		t.Fatalf("expected nextID advanced past 999, got %q", next)
 	}
 }
+
+func TestControllerClaimReserveAttackAndGCL(t *testing.T) {
+	w := NewWorld()
+	r1 := w.GenerateRoom("W8N8", 21)
+	r2 := w.GenerateRoom("W8N9", 22)
+	s1, err := w.SpawnBot("Alice", r1.Name)
+	if err != nil {
+		t.Fatalf("SpawnBot: %v", err)
+	}
+	alice := s1.User
+	bob := w.EnsureUser("Bob")
+
+	ctrl2 := r2.FindController()
+	if ctrl2 == nil {
+		t.Fatalf("expected controller in W8N9")
+	}
+	// Neutral room sources start at 1500 capacity when reserved/unowned.
+	claimer := addTestCreep(w, r2, alice, "Claimer", ctrl2.X+1, ctrl2.Y, []string{CLAIM, CLAIM, MOVE})
+	bobAttacker := addTestCreep(w, r2, bob, "Disruptor", ctrl2.X-1, ctrl2.Y, []string{CLAIM, MOVE})
+
+	// GCL 1 only allows 1 owned room -> claimController must return ERR_GCL_NOT_ENOUGH.
+	if code := w.QueueIntent(alice, Intent{Type: IntentClaimController, ActorID: claimer.ID, TargetID: ctrl2.ID}); code != ERR_GCL_NOT_ENOUGH {
+		t.Fatalf("expected ERR_GCL_NOT_ENOUGH at GCL 1, got %d", code)
+	}
+
+	// Reserve controller -> extends ReservationEndTime by 2 ticks and bumps sources to 3000.
+	if code := w.QueueIntent(alice, Intent{Type: IntentReserveController, ActorID: claimer.ID, TargetID: ctrl2.ID}); code != OK {
+		t.Fatalf("reserveController failed: %d", code)
+	}
+	w.Step()
+	if ctrl2.ReservationUser != alice || ctrl2.ReservationEndTime <= w.GameTime {
+		t.Fatalf("expected controller reserved by Alice, got user=%q end=%d (t=%d)", ctrl2.ReservationUser, ctrl2.ReservationEndTime, w.GameTime)
+	}
+	for _, e := range r2.Entities {
+		if e.Type == TYPE_SOURCE && e.EnergyCapacity != SOURCE_ENERGY_CAPACITY {
+			t.Fatalf("expected reserved source capacity %d, got %d", SOURCE_ENERGY_CAPACITY, e.EnergyCapacity)
+		}
+	}
+
+	// Grant Alice GCL 2 progress -> claimController succeeds.
+	w.UserGCL[alice] = GCL_MULTIPLY + 1
+	if code := w.QueueIntent(alice, Intent{Type: IntentClaimController, ActorID: claimer.ID, TargetID: ctrl2.ID}); code != OK {
+		t.Fatalf("claimController at GCL 2 failed: %d", code)
+	}
+	w.Step()
+	if ctrl2.User != alice || ctrl2.Level != 1 {
+		t.Fatalf("expected W8N9 claimed by Alice at RCL 1, got user=%q level=%d", ctrl2.User, ctrl2.Level)
+	}
+
+	// Bob attacks Alice's controller -> reduces DowngradeTime and sets UpgradeBlocked.
+	prevDowngrade := ctrl2.DowngradeTime
+	if code := w.QueueIntent(bob, Intent{Type: IntentAttackController, ActorID: bobAttacker.ID, TargetID: ctrl2.ID}); code != OK {
+		t.Fatalf("attackController failed: %d", code)
+	}
+	w.Step()
+	if ctrl2.DowngradeTime >= prevDowngrade {
+		t.Fatalf("expected DowngradeTime reduced, was %d now %d", prevDowngrade, ctrl2.DowngradeTime)
+	}
+	if ctrl2.UpgradeBlocked <= w.GameTime {
+		t.Fatalf("expected UpgradeBlocked set, got %d (t=%d)", ctrl2.UpgradeBlocked, w.GameTime)
+	}
+}
+
+func TestRangedMassAttackFalloff(t *testing.T) {
+	w := NewWorld()
+	room := w.GenerateRoom("W9N9", 23)
+	alice := w.EnsureUser("Alice")
+	bob := w.EnsureUser("Bob")
+
+	archer := addTestCreep(w, room, alice, "Archer", 20, 20, []string{RANGED_ATTACK, RANGED_ATTACK, MOVE})
+	e1 := addTestCreep(w, room, bob, "Near", 21, 20, []string{TOUGH, MOVE})   // dist 1 -> 2*10 = 20
+	e2 := addTestCreep(w, room, bob, "Mid", 22, 20, []string{TOUGH, MOVE})    // dist 2 -> 2*4 = 8
+	e3 := addTestCreep(w, room, bob, "Far", 23, 20, []string{TOUGH, MOVE})    // dist 3 -> 2*1 = 2
+	e4 := addTestCreep(w, room, bob, "Out", 24, 20, []string{TOUGH, MOVE})    // dist 4 -> 0
+	ally := addTestCreep(w, room, alice, "Ally", 19, 20, []string{TOUGH, MOVE}) // friendly -> 0
+
+	if code := w.QueueIntent(alice, Intent{Type: IntentRangedMassAttack, ActorID: archer.ID}); code != OK {
+		t.Fatalf("QueueIntent rangedMassAttack: %d", code)
+	}
+	w.Step()
+	if e1.Hits != 180 || e2.Hits != 192 || e3.Hits != 198 || e4.Hits != 200 || ally.Hits != 200 {
+		t.Fatalf("unexpected mass attack hits: e1=%d e2=%d e3=%d e4=%d ally=%d", e1.Hits, e2.Hits, e3.Hits, e4.Hits, ally.Hits)
+	}
+}

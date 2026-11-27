@@ -18,9 +18,13 @@ const (
 	IntentWithdraw          IntentType = "withdraw"
 	IntentBuild             IntentType = "build"
 	IntentRepair            IntentType = "repair"
-	IntentUpgradeController IntentType = "upgradeController"
-	IntentAttack            IntentType = "attack"
-	IntentRangedAttack      IntentType = "rangedAttack"
+	IntentUpgradeController      IntentType = "upgradeController"
+	IntentClaimController        IntentType = "claimController"
+	IntentReserveController      IntentType = "reserveController"
+	IntentAttackController       IntentType = "attackController"
+	IntentAttack                 IntentType = "attack"
+	IntentRangedAttack           IntentType = "rangedAttack"
+	IntentRangedMassAttack       IntentType = "rangedMassAttack"
 	IntentHeal              IntentType = "heal"
 	IntentRangedHeal        IntentType = "rangedHeal"
 	IntentDismantle         IntentType = "dismantle"
@@ -307,8 +311,76 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 		if target.User != userID {
 			return ERR_NOT_OWNER
 		}
+		if target.UpgradeBlocked > w.GameTime {
+			return ERR_INVALID_TARGET
+		}
 		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
 			return ERR_NOT_IN_RANGE
+		}
+
+	case IntentClaimController:
+		if actor.CountActiveParts(CLAIM) == 0 {
+			return ERR_NO_BODYPART
+		}
+		target := room.Entities[intent.TargetID]
+		if target == nil || target.Type != STRUCTURE_CONTROLLER {
+			return ERR_INVALID_TARGET
+		}
+		if target.User != "" {
+			return ERR_INVALID_TARGET
+		}
+		if target.ReservationUser != "" && target.ReservationUser != userID && target.ReservationEndTime > w.GameTime {
+			return ERR_INVALID_TARGET
+		}
+		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			return ERR_NOT_IN_RANGE
+		}
+		gclLevel, _, _ := w.UserGCLInfoLocked(userID)
+		if w.OwnedRoomCountLocked(userID) >= gclLevel {
+			return ERR_GCL_NOT_ENOUGH
+		}
+
+	case IntentReserveController:
+		if actor.CountActiveParts(CLAIM) == 0 {
+			return ERR_NO_BODYPART
+		}
+		target := room.Entities[intent.TargetID]
+		if target == nil || target.Type != STRUCTURE_CONTROLLER {
+			return ERR_INVALID_TARGET
+		}
+		if target.User != "" {
+			return ERR_INVALID_TARGET
+		}
+		if target.ReservationUser != "" && target.ReservationUser != userID && target.ReservationEndTime > w.GameTime {
+			return ERR_INVALID_TARGET
+		}
+		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			return ERR_NOT_IN_RANGE
+		}
+
+	case IntentAttackController:
+		if actor.CountActiveParts(CLAIM) == 0 {
+			return ERR_NO_BODYPART
+		}
+		target := room.Entities[intent.TargetID]
+		if target == nil || target.Type != STRUCTURE_CONTROLLER {
+			return ERR_INVALID_TARGET
+		}
+		hasOwner := target.User != ""
+		hasRes := target.ReservationUser != "" && target.ReservationEndTime > w.GameTime
+		if !hasOwner && !hasRes {
+			return ERR_INVALID_TARGET
+		}
+		if target.UpgradeBlocked > w.GameTime || (target.SafeMode > w.GameTime && target.User != userID) {
+			return ERR_TIRED
+		}
+		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			return ERR_NOT_IN_RANGE
+		}
+
+	case IntentRangedMassAttack:
+		if actor.CountActiveParts(RANGED_ATTACK) == 0 {
+			return ERR_NO_BODYPART
 		}
 
 	case IntentAttack:

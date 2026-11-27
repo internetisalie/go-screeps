@@ -279,13 +279,13 @@ func (d *combatDeltas) apply() {
 
 func actionConflictGroup(t IntentType) string {
 	switch t {
-	case IntentHarvest, IntentBuild, IntentRepair, IntentUpgradeController, IntentDismantle:
+	case IntentHarvest, IntentBuild, IntentRepair, IntentUpgradeController, IntentDismantle, IntentClaimController, IntentReserveController, IntentAttackController:
 		return "work"
 	case IntentHeal, IntentRangedHeal:
 		return "heal"
 	case IntentAttack:
 		return "attack"
-	case IntentRangedAttack:
+	case IntentRangedAttack, IntentRangedMassAttack:
 		return "ranged"
 	default:
 		return string(t)
@@ -493,7 +493,7 @@ func processCreepActions(w *World, intents []Intent, deltas *combatDeltas) {
 
 		case IntentUpgradeController:
 			target := room.Entities[in.TargetID]
-			if target == nil || target.Type != STRUCTURE_CONTROLLER || target.User != actor.User {
+			if target == nil || target.Type != STRUCTURE_CONTROLLER || target.User != actor.User || target.UpgradeBlocked > w.GameTime {
 				continue
 			}
 			if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
@@ -510,11 +510,91 @@ func processCreepActions(w *World, intents []Intent, deltas *combatDeltas) {
 			}
 			actor.SubStore(RESOURCE_ENERGY, amt)
 			target.Progress += amt
+			if w.UserGCL == nil {
+				w.UserGCL = make(map[string]int)
+			}
+			w.UserGCL[actor.User] += amt
 			if dg, ok := CONTROLLER_DOWNGRADE[target.Level]; ok {
 				target.DowngradeTime = w.GameTime + int64(dg)
 			}
 			actor.SetAction("upgradeController", target.X, target.Y)
 			checkControllerUpgrade(w, room, target)
+
+		case IntentClaimController:
+			target := room.Entities[in.TargetID]
+			if target == nil || target.Type != STRUCTURE_CONTROLLER || target.User != "" {
+				continue
+			}
+			if target.ReservationUser != "" && target.ReservationUser != actor.User && target.ReservationEndTime > w.GameTime {
+				continue
+			}
+			if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 || actor.CountActiveParts(CLAIM) == 0 {
+				continue
+			}
+			gclLevel, _, _ := w.UserGCLInfoLocked(actor.User)
+			if w.OwnedRoomCountLocked(actor.User) >= gclLevel {
+				continue
+			}
+			target.User = actor.User
+			target.Level = 1
+			target.Progress = 0
+			target.ProgressTotal = CONTROLLER_LEVELS[1]
+			target.DowngradeTime = w.GameTime + int64(CONTROLLER_DOWNGRADE[1])
+			target.SafeModeAvailable = 1
+			target.ReservationUser = ""
+			target.ReservationEndTime = 0
+			syncRoomSourceCapacities(room, true)
+			w.recordEventLocked(room.Name, "rcl", fmt.Sprintf("%s claimed %s!", w.userNameLocked(actor.User), room.Name))
+			actor.SetAction("claimController", target.X, target.Y)
+
+		case IntentReserveController:
+			target := room.Entities[in.TargetID]
+			if target == nil || target.Type != STRUCTURE_CONTROLLER || target.User != "" {
+				continue
+			}
+			if target.ReservationUser != "" && target.ReservationUser != actor.User && target.ReservationEndTime > w.GameTime {
+				continue
+			}
+			parts := actor.CountActiveParts(CLAIM)
+			if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 || parts == 0 {
+				continue
+			}
+			if target.ReservationUser != actor.User || target.ReservationEndTime < w.GameTime {
+				target.ReservationUser = actor.User
+				target.ReservationEndTime = w.GameTime
+			}
+			target.ReservationEndTime += int64(parts * CONTROLLER_RESERVE)
+			maxEnd := w.GameTime + CONTROLLER_RESERVE_MAX
+			if target.ReservationEndTime > maxEnd {
+				target.ReservationEndTime = maxEnd
+			}
+			syncRoomSourceCapacities(room, true)
+			actor.SetAction("reserveController", target.X, target.Y)
+
+		case IntentAttackController:
+			target := room.Entities[in.TargetID]
+			if target == nil || target.Type != STRUCTURE_CONTROLLER {
+				continue
+			}
+			parts := actor.CountActiveParts(CLAIM)
+			if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 || parts == 0 {
+				continue
+			}
+			if target.UpgradeBlocked > w.GameTime || (target.SafeMode > w.GameTime && target.User != actor.User) {
+				continue
+			}
+			if target.User != "" {
+				target.DowngradeTime -= int64(parts * CONTROLLER_CLAIM_DOWNGRADE)
+				target.UpgradeBlocked = w.GameTime + CONTROLLER_ATTACK_BLOCKED_UPGRADE
+			} else if target.ReservationUser != "" && target.ReservationEndTime > w.GameTime {
+				target.ReservationEndTime -= int64(parts * CONTROLLER_RESERVE)
+				if target.ReservationEndTime <= w.GameTime {
+					target.ReservationUser = ""
+					target.ReservationEndTime = 0
+					syncRoomSourceCapacities(room, false)
+				}
+			}
+			actor.SetAction("attackController", target.X, target.Y)
 
 		case IntentDismantle:
 			target := room.Entities[in.TargetID]
@@ -573,6 +653,29 @@ func processCreepActions(w *World, intents []Intent, deltas *combatDeltas) {
 				deltas.addDamage(effective, parts*RANGED_ATTACK_POWER)
 			}
 			actor.SetAction("rangedAttack", target.X, target.Y)
+
+		case IntentRangedMassAttack:
+			parts := actor.CountActiveParts(RANGED_ATTACK)
+			if parts == 0 {
+				continue
+			}
+			for _, target := range room.Entities {
+				if target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) {
+					continue
+				}
+				if target.User == "" || target.User == actor.User {
+					continue
+				}
+				dist := ChebyshevDist(actor.X, actor.Y, target.X, target.Y)
+				if dist < 1 || dist > 3 {
+					continue
+				}
+				dmg := parts * RangedMassAttackPower[dist]
+				if effective := resolveCombatTarget(w, room, actor.User, target); effective != nil {
+					deltas.addDamage(effective, dmg)
+				}
+			}
+			actor.SetAction("rangedMassAttack", actor.X, actor.Y)
 
 		case IntentHeal:
 			target := room.Entities[in.TargetID]
@@ -761,6 +864,11 @@ func processRoomPassives(w *World, roomNames []string) {
 				}
 
 			case STRUCTURE_CONTROLLER:
+				if e.User == "" && e.ReservationUser != "" && w.GameTime >= e.ReservationEndTime {
+					e.ReservationUser = ""
+					e.ReservationEndTime = 0
+					syncRoomSourceCapacities(room, false)
+				}
 				if e.User != "" && e.Level > 0 {
 					checkControllerUpgrade(w, room, e)
 					if e.DowngradeTime > 0 && w.GameTime >= e.DowngradeTime {
@@ -774,6 +882,7 @@ func processRoomPassives(w *World, roomNames []string) {
 							e.Progress = 0
 							e.ProgressTotal = 0
 							e.DowngradeTime = 0
+							syncRoomSourceCapacities(room, false)
 						} else {
 							w.recordEventLocked(room.Name, "danger", fmt.Sprintf("%s controller downgraded to RCL %d", ownerName, e.Level))
 							e.Progress = 0
@@ -886,6 +995,21 @@ func updateExtensionCapacities(room *Room, ownerID string, rcl int) {
 				e.StoreCapacityResource = make(map[string]int)
 			}
 			e.StoreCapacityResource[RESOURCE_ENERGY] = extCap
+		}
+	}
+}
+
+func syncRoomSourceCapacities(room *Room, claimedOrReserved bool) {
+	capVal := SOURCE_ENERGY_NEUTRAL_CAPACITY
+	if claimedOrReserved {
+		capVal = SOURCE_ENERGY_CAPACITY
+	}
+	for _, e := range room.Entities {
+		if e.Type == TYPE_SOURCE {
+			e.EnergyCapacity = capVal
+			if e.Energy > capVal {
+				e.Energy = capVal
+			}
 		}
 	}
 }

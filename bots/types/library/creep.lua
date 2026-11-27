@@ -85,6 +85,21 @@ function Creep:repair(target) end
 ---@return ScreepsReturnCode
 function Creep:upgradeController(target) end
 
+---Claim a neutral room controller (requires CLAIM part and available GCL).
+---@param target StructureController
+---@return ScreepsReturnCode
+function Creep:claimController(target) end
+
+---Reserve a neutral room controller (requires CLAIM part).
+---@param target StructureController
+---@return ScreepsReturnCode
+function Creep:reserveController(target) end
+
+---Attack a hostile or reserved room controller (requires CLAIM part).
+---@param target StructureController
+---@return ScreepsReturnCode
+function Creep:attackController(target) end
+
 ---Melee attack a hostile creep or structure.
 ---@param target Creep|Structure
 ---@return ScreepsReturnCode
@@ -94,6 +109,10 @@ function Creep:attack(target) end
 ---@param target Creep|Structure
 ---@return ScreepsReturnCode
 function Creep:rangedAttack(target) end
+
+---Ranged mass attack all hostile creeps and structures within range 3 (10/4/1 dmg per RANGED_ATTACK part).
+---@return ScreepsReturnCode
+function Creep:rangedMassAttack() end
 
 ---Heal an adjacent creep (or self).
 ---@param target Creep

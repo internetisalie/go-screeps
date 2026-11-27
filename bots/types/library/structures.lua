@@ -30,6 +30,10 @@ local StructureSpawn = {}
 ---@return ScreepsReturnCode
 function StructureSpawn:spawnCreep(body, name, opts) end
 
+---@class ControllerReservation
+---@field username string
+---@field ticksToEnd integer
+
 ---@class StructureController : Structure
 ---@field level integer
 ---@field progress integer
@@ -38,6 +42,8 @@ function StructureSpawn:spawnCreep(body, name, opts) end
 ---@field safeModeAvailable integer
 ---@field safeModeCooldown? integer
 ---@field ticksToDowngrade? integer
+---@field reservation? ControllerReservation
+---@field upgradeBlocked? integer
 local StructureController = {}
 
 ---Activate Safe Mode on this controller if available and off cooldown.

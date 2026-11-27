@@ -1101,7 +1101,17 @@ function CreepAgent:defender()
             local hasRanged = CreepAgent.hasActivePart(creep, screeps.PART.RANGED_ATTACK)
 
             if hasRanged and range <= 3 then
-                creep:rangedAttack(target)
+                local inRangeCount = 0
+                for _, h in ipairs(hostiles) do
+                    if h.pos and creep.pos:getRangeTo(h) <= 3 then
+                        inRangeCount = inRangeCount + 1
+                    end
+                end
+                if range <= 1 or inRangeCount >= 2 then
+                    creep:rangedMassAttack()
+                else
+                    creep:rangedAttack(target)
+                end
             end
 
             -- Rampart-aware positioning: hold or step onto a nearby rampart in weapon range.
@@ -1985,6 +1995,123 @@ function CreepAgent:healer()
     end
 end
 
+---15. Reserver: reserves the assigned remote mining room's controller for 2x source energy capacity (3000).
+function CreepAgent:reserver()
+    local creep = self.creep
+    local room = self.room
+    local homeRoom = self.memory.homeRoom or self.memory.room or room.name
+    self.memory.homeRoom = homeRoom
+    local rmem = screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom]
+    if room.name == homeRoom then
+        self.memory.targetRoom = rmem and rmem.remoteRoom or nil
+    end
+    local targetRoom = self.memory.targetRoom
+    if not targetRoom then
+        return
+    end
+    if room.name ~= targetRoom then
+        self:moveAcrossExit(targetRoom, nil)
+        return
+    end
+    if self:stepOffEdge() then
+        return
+    end
+    local ctrl = room.controller
+    if not ctrl then
+        return
+    end
+    self:drawTargetLine(ctrl, "#26c6da")
+    if ctrl.reservation and ctrl.reservation.username and ctrl.reservation.username ~= "" then
+        local myRoom = screeps.Game.rooms and screeps.Game.rooms[homeRoom]
+        local myOwner = myRoom and myRoom.controller and myRoom.controller.owner and myRoom.controller.owner.username
+        if myOwner and ctrl.reservation.username ~= myOwner then
+            if creep:attackController(ctrl) == screeps.ERR.NOT_IN_RANGE then
+                creep:moveTo(ctrl)
+            end
+            return
+        end
+    end
+    if creep:reserveController(ctrl) == screeps.ERR.NOT_IN_RANGE then
+        creep:moveTo(ctrl)
+    end
+end
+
+---16. Claimer: claims a neutral adjacent room controller when GCL allows expansion.
+function CreepAgent:claimer()
+    local creep = self.creep
+    local room = self.room
+    local homeRoom = self.memory.homeRoom or self.memory.room or room.name
+    self.memory.homeRoom = homeRoom
+    local targetRoom = self.memory.targetRoom
+    if not targetRoom then
+        return
+    end
+    if room.name ~= targetRoom then
+        self:moveAcrossExit(targetRoom, nil)
+        return
+    end
+    if self:stepOffEdge() then
+        return
+    end
+    local ctrl = room.controller
+    if not ctrl or ctrl.my then
+        return
+    end
+    self:drawTargetLine(ctrl, "#66bb6a")
+    if creep:claimController(ctrl) == screeps.ERR.NOT_IN_RANGE then
+        creep:moveTo(ctrl)
+    end
+end
+
+---17. Pioneer: bootstraps a newly claimed expansion room by placing and building its initial Spawn.
+function CreepAgent:pioneer()
+    local creep = self.creep
+    local room = self.room
+    local targetRoom = self.memory.targetRoom
+    if not targetRoom then
+        self:builder()
+        return
+    end
+    if room.name ~= targetRoom then
+        self:moveAcrossExit(targetRoom, nil)
+        return
+    end
+    if self:stepOffEdge() then
+        return
+    end
+
+    -- Ensure an initial Spawn construction site exists once the room is claimed.
+    if room.controller and room.controller.my then
+        RoomPlanner.placeInitialSpawn(room)
+    end
+
+    self:updateWorkingState()
+    if self.memory.working then
+        local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+        if #sites > 0 then
+            local target = CreepAgent.findClosest(creep.pos, sites)
+            if target then
+                self:drawTargetLine(target, "#aed581")
+                if creep:build(target) == screeps.ERR.NOT_IN_RANGE then
+                    creep:moveTo(target)
+                end
+                return
+            end
+        end
+        if room.controller and room.controller.my then
+            self:upgradeRoomController()
+            return
+        end
+    else
+        local src = self:findNearestSource()
+        if src then
+            if creep:harvest(src) == screeps.ERR.NOT_IN_RANGE then
+                creep:moveTo(src)
+            end
+        end
+    end
+end
+
 ---@type table<string, fun(self: CreepAgent)>
 local ROLE_HANDLERS <const> = {
     harvester = CreepAgent.harvester,
@@ -1998,6 +2125,9 @@ local ROLE_HANDLERS <const> = {
     remoteHauler = CreepAgent.remoteHauler,
     remoteBuilder = CreepAgent.remoteBuilder,
     mineralHarvester = CreepAgent.mineralHarvester,
+    reserver = CreepAgent.reserver,
+    claimer = CreepAgent.claimer,
+    pioneer = CreepAgent.pioneer,
     assault = CreepAgent.assault,
     dismantler = CreepAgent.dismantler,
     healer = CreepAgent.healer,

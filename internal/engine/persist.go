@@ -12,6 +12,7 @@ type WorldState struct {
 	GameTime   int64             `json:"gameTime"`
 	Users      map[string]string `json:"users"`
 	UserByName map[string]string `json:"userByName"`
+	UserGCL    map[string]int    `json:"userGcl,omitempty"`
 	NextID     uint64            `json:"nextId"`
 	Status     string            `json:"status,omitempty"`
 	Rooms      []RoomState       `json:"rooms"`
@@ -65,9 +66,12 @@ type EntityState struct {
 	Progress      int    `json:"progress,omitempty"`
 	ProgressTotal int    `json:"progressTotal,omitempty"`
 	DowngradeTime     int64  `json:"downgradeTime,omitempty"`
-	SafeMode          int64  `json:"safeMode,omitempty"`
-	SafeModeAvailable int    `json:"safeModeAvailable,omitempty"`
-	SafeModeCooldown  int64  `json:"safeModeCooldown,omitempty"`
+	SafeMode           int64  `json:"safeMode,omitempty"`
+	SafeModeAvailable  int    `json:"safeModeAvailable,omitempty"`
+	SafeModeCooldown   int64  `json:"safeModeCooldown,omitempty"`
+	ReservationUser    string `json:"reservationUser,omitempty"`
+	ReservationEndTime int64  `json:"reservationEndTime,omitempty"`
+	UpgradeBlocked     int64  `json:"upgradeBlocked,omitempty"`
 	StructureType     string `json:"structureType,omitempty"`
 
 	// Dropped resource fields
@@ -171,6 +175,9 @@ func entityToState(e *Entity) EntityState {
 		SafeMode:              e.SafeMode,
 		SafeModeAvailable:     e.SafeModeAvailable,
 		SafeModeCooldown:      e.SafeModeCooldown,
+		ReservationUser:       e.ReservationUser,
+		ReservationEndTime:    e.ReservationEndTime,
+		UpgradeBlocked:        e.UpgradeBlocked,
 		StructureType:         e.StructureType,
 		ResourceType:          e.ResourceType,
 		Amount:                e.Amount,
@@ -216,6 +223,9 @@ func stateToEntity(es EntityState) *Entity {
 		SafeMode:              es.SafeMode,
 		SafeModeAvailable:     es.SafeModeAvailable,
 		SafeModeCooldown:      es.SafeModeCooldown,
+		ReservationUser:       es.ReservationUser,
+		ReservationEndTime:    es.ReservationEndTime,
+		UpgradeBlocked:        es.UpgradeBlocked,
 		StructureType:         es.StructureType,
 		ResourceType:          es.ResourceType,
 		Amount:                es.Amount,
@@ -270,6 +280,7 @@ func (w *World) ExportState() WorldState {
 		GameTime:   w.GameTime,
 		Users:      cloneStringMap(w.Users),
 		UserByName: cloneStringMap(w.UserByName),
+		UserGCL:    cloneIntMap(w.UserGCL),
 		NextID:     w.nextID,
 		Status:     w.Status,
 		Rooms:      rooms,
@@ -369,6 +380,10 @@ func (w *World) ImportState(st WorldState) error {
 	w.GameTime = st.GameTime
 	w.Users = users
 	w.UserByName = userByName
+	w.UserGCL = cloneIntMap(st.UserGCL)
+	if w.UserGCL == nil {
+		w.UserGCL = make(map[string]int)
+	}
 	w.nextID = nextID
 	if st.Status != "" {
 		w.Status = st.Status

@@ -72,14 +72,17 @@ type Entity struct {
 	MineralAmount int
 
 	// Controller / ConstructionSite fields
-	Level         int
-	Progress      int
-	ProgressTotal int
-	DowngradeTime     int64
-	SafeMode          int64
-	SafeModeAvailable int
-	SafeModeCooldown  int64
-	StructureType     string // for constructionSite
+	Level              int
+	Progress           int
+	ProgressTotal      int
+	DowngradeTime      int64
+	SafeMode           int64
+	SafeModeAvailable  int
+	SafeModeCooldown   int64
+	ReservationUser    string
+	ReservationEndTime int64
+	UpgradeBlocked     int64
+	StructureType      string // for constructionSite
 
 	// Dropped resource fields
 	ResourceType string
@@ -424,6 +427,7 @@ type World struct {
 	Rooms      map[string]*Room
 	Users      map[string]string // userID -> username
 	UserByName map[string]string // username -> userID
+	UserGCL    map[string]int    // userID -> total upgrade energy contributed to GCL
 	Status     string
 
 	nextID  uint64
@@ -496,8 +500,48 @@ func NewWorld() *World {
 			"Invader":       "2",
 			"Source Keeper": "3",
 		},
-		Status: "Local Simulation",
+		UserGCL: make(map[string]int),
+		Status:  "Local Simulation",
 	}
+}
+
+// UserGCLInfoLocked computes (level, progressInLevel, progressTotalForNextLevel) for userID.
+// Caller must hold w.mu.RLock() or w.mu.Lock().
+func (w *World) UserGCLInfoLocked(userID string) (level, progress, progressTotal int) {
+	total := 0
+	if w.UserGCL != nil {
+		total = w.UserGCL[userID]
+	}
+	if total < 0 {
+		total = 0
+	}
+	level = int(math.Floor(math.Pow(float64(total)/float64(GCL_MULTIPLY), 1.0/GCL_POW))) + 1
+	if level < 1 {
+		level = 1
+	}
+	curThreshold := int(math.Floor(math.Pow(float64(level-1), GCL_POW) * float64(GCL_MULTIPLY)))
+	nextThreshold := int(math.Floor(math.Pow(float64(level), GCL_POW) * float64(GCL_MULTIPLY)))
+	progress = total - curThreshold
+	if progress < 0 {
+		progress = 0
+	}
+	progressTotal = nextThreshold - curThreshold
+	if progressTotal <= 0 {
+		progressTotal = GCL_MULTIPLY
+	}
+	return level, progress, progressTotal
+}
+
+// OwnedRoomCountLocked returns how many rooms currently have a controller owned by userID.
+// Caller must hold w.mu.RLock() or w.mu.Lock().
+func (w *World) OwnedRoomCountLocked(userID string) int {
+	n := 0
+	for _, r := range w.Rooms {
+		if ctrl := r.FindController(); ctrl != nil && ctrl.User == userID && ctrl.Level > 0 {
+			n++
+		}
+	}
+	return n
 }
 
 // RLock acquires the world's read lock.

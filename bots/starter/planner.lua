@@ -1278,6 +1278,73 @@ function RoomPlanner:drawVisuals()
     end
 end
 
+---Place an initial Spawn construction site in a newly claimed room that has no Spawn yet.
+---@param room Room
+function RoomPlanner.placeInitialSpawn(room)
+    if not room or not room.controller or not room.controller.my then
+        return
+    end
+    local spawns = room:find(screeps.FIND.MY_SPAWNS) or {} ---@type StructureSpawn[]
+    if #spawns > 0 then
+        return
+    end
+    local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+    for _, s in ipairs(sites) do
+        if s.structureType == screeps.STRUCTURE.SPAWN then
+            return
+        end
+    end
+    local terrain = room:getTerrain()
+    if not terrain then
+        return
+    end
+    local sources = room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
+    local ctrlPos = room.controller.pos
+    local bestX, bestY = nil, nil
+    local bestScore = math.maxinteger
+    for x = 8, 41 do
+        for y = 8, 41 do
+            if terrain:get(x, y) == 0 then
+                -- Ensure a 3x3 open neighborhood around the spawn.
+                local openNeighbors = 0
+                for dx = -1, 1 do
+                    for dy = -1, 1 do
+                        if (dx ~= 0 or dy ~= 0) and terrain:get(x + dx, y + dy) ~= 1 then
+                            openNeighbors = openNeighbors + 1
+                        end
+                    end
+                end
+                if openNeighbors >= 7 then
+                    local score = 0
+                    if ctrlPos then
+                        local cd = RoomPlanner.chebyshev(x, y, ctrlPos.x, ctrlPos.y)
+                        if cd < 3 then
+                            score = score + 50
+                        end
+                        score = score + cd
+                    end
+                    for _, src in ipairs(sources) do
+                        if src.pos then
+                            local sd = RoomPlanner.chebyshev(x, y, src.pos.x, src.pos.y)
+                            if sd < 3 then
+                                score = score + 50
+                            end
+                            score = score + sd
+                        end
+                    end
+                    if score < bestScore then
+                        bestScore = score
+                        bestX, bestY = x, y
+                    end
+                end
+            end
+        end
+    end
+    if bestX and bestY then
+        room:createConstructionSite(bestX, bestY, screeps.STRUCTURE.SPAWN)
+    end
+end
+
 ---Plan containers and roads inside an unowned remote mining room toward homeRoomName.
 ---@param room Room
 ---@param homeRoomName string

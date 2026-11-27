@@ -42,6 +42,9 @@ local PRESPAWN_TTL <const> = {
 ---@field remoteHauler integer
 ---@field remoteBuilder integer
 ---@field mineralHarvester integer
+---@field reserver integer
+---@field claimer integer
+---@field pioneer integer
 ---@field total? integer
 
 ---@class Colony
@@ -217,8 +220,30 @@ function Colony.minRoleCost(role)
         return 300
     elseif role == "mineralHarvester" then
         return 400
+    elseif role == "reserver" or role == "claimer" then
+        return 650
+    elseif role == "pioneer" then
+        return 300
     end
     return 200
+end
+
+---Build a controller claimer/reserver body (CLAIM + MOVE, up to 2 pairs for reserver).
+---@param budget integer
+---@param maxPairs integer
+---@return BodyPartType[]|nil
+function Colony.buildClaimBody(budget, maxPairs)
+    if budget < 650 then
+        return nil
+    end
+    local pairsCount = math.min(maxPairs, budget // 650)
+    ---@type BodyPartType[]
+    local body = {}
+    for _ = 1, pairsCount do
+        table.insert(body, screeps.PART.CLAIM)
+        table.insert(body, screeps.PART.MOVE)
+    end
+    return body
 end
 
 ---@param roomName string
@@ -294,6 +319,9 @@ function Colony:countRoles()
         remoteHauler = 0,
         remoteBuilder = 0,
         mineralHarvester = 0,
+        reserver = 0,
+        claimer = 0,
+        pioneer = 0,
         total = 0,
     }
     if screeps.Game.creeps then
@@ -406,6 +434,52 @@ function Colony:updateRemoteRoom()
     return chosen
 end
 
+---Select an adjacent unowned, safe 2-source room for GCL expansion when GCL permits.
+---@return string|nil
+function Colony:updateExpandRoom()
+    local gclLevel = (screeps.Game.gcl and screeps.Game.gcl.level) or 1
+    local ownedCount = 0
+    if screeps.Game.rooms then
+        for _, r in pairs(screeps.Game.rooms) do
+            if r.controller and r.controller.my then
+                ownedCount = ownedCount + 1
+            end
+        end
+    end
+    -- Keep existing expansion target while it's newly claimed and still building its first Spawn.
+    local cur = self.memory.expandRoom
+    if cur and screeps.Game.rooms and screeps.Game.rooms[cur] then
+        local expRoom = screeps.Game.rooms[cur]
+        if expRoom.controller and expRoom.controller.my then
+            local sp = expRoom:find(screeps.FIND.MY_SPAWNS) or {}
+            if #sp > 0 then
+                self.memory.expandRoom = nil
+                return nil
+            end
+            return cur
+        end
+    end
+    if ownedCount >= gclLevel then
+        self.memory.expandRoom = nil
+        return nil
+    end
+    local adj = Colony.getAdjacentRoomNames(self.room.name)
+    local intelMap = (screeps.Memory and screeps.Memory.roomIntel) or {}
+    local best = nil
+    local bestSources = 0
+    for _, rName in ipairs(adj) do
+        local info = intelMap[rName]
+        if info and (info.owner == nil or info.owner == "") and (info.hostiles or 0) == 0 and (info.sources or 0) >= 2 then
+            if info.sources > bestSources then
+                bestSources = info.sources
+                best = rName
+            end
+        end
+    end
+    self.memory.expandRoom = best
+    return best
+end
+
 ---Identify an adjacent hostile-owned room for coordinated counter-assault waves.
 ---@return string|nil
 function Colony:updateAttackTarget()
@@ -482,6 +556,9 @@ function Colony:computeTargetRoster(energyCap)
         remoteHauler = 0,
         remoteBuilder = 0,
         mineralHarvester = 0,
+        reserver = 0,
+        claimer = 0,
+        pioneer = 0,
     }
 
     if useStaticMiners then
@@ -530,6 +607,24 @@ function Colony:computeTargetRoster(energyCap)
         targets.remoteHauler = (targets.remoteHarvester >= 2) and 2 or 1
         if rcl >= 3 and energyCap >= 550 then
             targets.remoteBuilder = 1
+        end
+        if rcl >= 3 and energyCap >= 650 then
+            local remVis = screeps.Game.rooms and screeps.Game.rooms[self.memory.remoteRoom]
+            local remRes = remVis and remVis.controller and remVis.controller.reservation
+            if not remRes or (remRes.ticksToEnd or 0) < 2500 then
+                targets.reserver = 1
+            end
+        end
+    end
+
+    -- GCL room expansion: claim a safe 2-source room and send pioneers to build its Spawn1.
+    local expandRoom = self:updateExpandRoom()
+    if rcl >= 3 and energyCap >= 650 and self.defense.threatLevel == 0 and expandRoom then
+        local expVis = screeps.Game.rooms and screeps.Game.rooms[expandRoom]
+        if expVis and expVis.controller and expVis.controller.my then
+            targets.pioneer = 2
+        else
+            targets.claimer = 1
         end
     end
 
@@ -623,6 +718,12 @@ function Colony:manageSpawning()
         roleToSpawn = "remoteHauler"
     elseif counts.remoteBuilder < targets.remoteBuilder then
         roleToSpawn = "remoteBuilder"
+    elseif counts.reserver < targets.reserver then
+        roleToSpawn = "reserver"
+    elseif counts.claimer < targets.claimer then
+        roleToSpawn = "claimer"
+    elseif counts.pioneer < targets.pioneer then
+        roleToSpawn = "pioneer"
     elseif counts.mineralHarvester < targets.mineralHarvester then
         roleToSpawn = "mineralHarvester"
     elseif counts.healer < targets.healer then
@@ -658,7 +759,11 @@ function Colony:manageSpawning()
         body = Colony.buildRemoteHarvesterBody(budget)
     elseif roleToSpawn == "remoteHauler" then
         body = Colony.buildRemoteHaulerBody(budget)
-    elseif roleToSpawn == "mineralHarvester" then
+    elseif roleToSpawn == "reserver" then
+        body = Colony.buildClaimBody(budget, 2)
+    elseif roleToSpawn == "claimer" then
+        body = Colony.buildClaimBody(budget, 1)
+    elseif roleToSpawn == "mineralHarvester" or roleToSpawn == "pioneer" then
         body = Colony.buildWorkerBody(budget)
     else
         body = Colony.buildWorkerBody(budget)
@@ -682,8 +787,10 @@ function Colony:manageSpawning()
     }
     if roleToSpawn == "scout" and scoutTarget then
         creepMem.targetRoom = scoutTarget
-    elseif (roleToSpawn == "remoteHarvester" or roleToSpawn == "remoteHauler" or roleToSpawn == "remoteBuilder") and rmem.remoteRoom then
+    elseif (roleToSpawn == "remoteHarvester" or roleToSpawn == "remoteHauler" or roleToSpawn == "remoteBuilder" or roleToSpawn == "reserver") and rmem.remoteRoom then
         creepMem.targetRoom = rmem.remoteRoom
+    elseif (roleToSpawn == "claimer" or roleToSpawn == "pioneer") and rmem.expandRoom then
+        creepMem.targetRoom = rmem.expandRoom
     elseif (roleToSpawn == "assault" or roleToSpawn == "dismantler" or roleToSpawn == "healer") and rmem.attackTarget then
         creepMem.targetRoom = rmem.attackTarget
     end

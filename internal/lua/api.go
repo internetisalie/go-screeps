@@ -448,8 +448,12 @@ func (vm *BotVM) initMetatables() {
 		"build":             {vm.creepTargetIntent(engine.IntentBuild), 2},
 		"repair":            {vm.creepTargetIntent(engine.IntentRepair), 2},
 		"upgradeController": {vm.creepTargetIntent(engine.IntentUpgradeController), 2},
+		"claimController":   {vm.creepTargetIntent(engine.IntentClaimController), 2},
+		"reserveController": {vm.creepTargetIntent(engine.IntentReserveController), 2},
+		"attackController":  {vm.creepTargetIntent(engine.IntentAttackController), 2},
 		"attack":            {vm.creepTargetIntent(engine.IntentAttack), 2},
 		"rangedAttack":      {vm.creepTargetIntent(engine.IntentRangedAttack), 2},
+		"rangedMassAttack":  {vm.creepRangedMassAttack, 1},
 		"heal":              {vm.creepTargetIntent(engine.IntentHeal), 2},
 		"rangedHeal":        {vm.creepTargetIntent(engine.IntentRangedHeal), 2},
 		"dismantle":         {vm.creepTargetIntent(engine.IntentDismantle), 2},
@@ -633,6 +637,15 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 		return c.PushingNext1(t.Runtime, rt.FloatValue(usedMs)), nil
 	}, 0, false)))
 	tblSet(game, "cpu", rt.TableValue(cpuTbl))
+
+	world.RLock()
+	gclLevel, gclProgress, gclTotal := world.UserGCLInfoLocked(vm.UserID)
+	world.RUnlock()
+	gclTbl := rt.NewTable()
+	tblSet(gclTbl, "level", rt.IntValue(int64(gclLevel)))
+	tblSet(gclTbl, "progress", rt.IntValue(int64(gclProgress)))
+	tblSet(gclTbl, "progressTotal", rt.IntValue(int64(gclTotal)))
+	tblSet(game, "gcl", rt.TableValue(gclTbl))
 
 	mapTbl := rt.NewTable()
 	tblSet(mapTbl, "describeExits", rt.FunctionValue(vm.newGoFunc("Game.map.describeExits", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
@@ -898,6 +911,14 @@ func (vm *BotVM) wrapEntityByID(id string) *rt.Table {
 	creepID, deathTime, decayTime := e.CreepID, e.DeathTime, e.DecayTime
 	nextDecay, cooldown := e.NextDecayTime, e.Cooldown
 	safeMode, safeModeAvail, safeModeCD := e.SafeMode, e.SafeModeAvailable, e.SafeModeCooldown
+	resUser, resEndTime, upgradeBlocked := e.ReservationUser, e.ReservationEndTime, e.UpgradeBlocked
+	resOwnerName := ""
+	if resUser != "" {
+		resOwnerName = vm.world.Users[resUser]
+		if resOwnerName == "" {
+			resOwnerName = resUser
+		}
+	}
 	isStruct := e.IsStructure()
 	hasStore := e.StoreCapacity > 0 || len(e.StoreCapacityResource) > 0 || len(e.Store) > 0 ||
 		typ == engine.TYPE_CREEP || typ == engine.STRUCTURE_SPAWN || typ == engine.STRUCTURE_EXTENSION ||
@@ -1008,6 +1029,15 @@ func (vm *BotVM) wrapEntityByID(id string) *rt.Table {
 		}
 		if safeModeCD > gameTime {
 			tblSet(t, "safeModeCooldown", rt.IntValue(safeModeCD-gameTime))
+		}
+		if resUser != "" && resEndTime > gameTime {
+			resTbl := rt.NewTableWithCapacity(0, 2)
+			tblSet(resTbl, "username", rt.StringValue(resOwnerName))
+			tblSet(resTbl, "ticksToEnd", rt.IntValue(resEndTime-gameTime))
+			tblSet(t, "reservation", rt.TableValue(resTbl))
+		}
+		if upgradeBlocked > gameTime {
+			tblSet(t, "upgradeBlocked", rt.IntValue(upgradeBlocked-gameTime))
 		}
 		if downgradeTime > 0 {
 			rem := downgradeTime - gameTime
@@ -2183,6 +2213,18 @@ func (vm *BotVM) creepDrop(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		ActorID:      actorID,
 		ResourceType: resType,
 		Amount:       amount,
+	})
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
+}
+
+func (vm *BotVM) creepRangedMassAttack(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
+	if !ok || vm.world == nil {
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
+	}
+	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
+		Type:    engine.IntentRangedMassAttack,
+		ActorID: actorID,
 	})
 	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }

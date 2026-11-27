@@ -32,6 +32,11 @@ local GameMap = {}
 ---@return table<string, string>|nil
 function GameMap.describeExits(roomName) end
 
+---@class GameGCL
+---@field level integer
+---@field progress integer
+---@field progressTotal integer
+
 ---@class Game
 ---@field time integer Current simulation tick
 ---@field rooms table<string, Room> Visible rooms keyed by room name
@@ -40,6 +45,7 @@ function GameMap.describeExits(roomName) end
 ---@field structures table<string, Structure> Owned structures keyed by entity ID
 ---@field constructionSites table<string, ConstructionSite> Owned construction sites keyed by entity ID
 ---@field cpu GameCPU
+---@field gcl GameGCL
 ---@field map GameMap
 local Game = {}
 

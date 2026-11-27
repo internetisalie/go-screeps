@@ -163,10 +163,23 @@ const (
 	RAMPART_DECAY_TIME        = 100
 	TOMBSTONE_DECAY_PER_PART  = 5
 	ENERGY_DECAY              = 1000
-	CONSTRUCTION_SITE_MAX_NUM = 100
-	SAFE_MODE_DURATION        = 20000
-	SAFE_MODE_COOLDOWN        = 50000
+	CONSTRUCTION_SITE_MAX_NUM         = 100
+	SAFE_MODE_DURATION                = 20000
+	SAFE_MODE_COOLDOWN                = 50000
+	CONTROLLER_RESERVE                = 1
+	CONTROLLER_RESERVE_MAX            = 5000
+	CONTROLLER_CLAIM_DOWNGRADE        = 300
+	CONTROLLER_ATTACK_BLOCKED_UPGRADE = 1000
+	GCL_POW                           = 2.4
+	GCL_MULTIPLY                      = 50000 // Local-sim GCL scale (GCL 2 at 50k upgrade energy)
 )
+
+// RangedMassAttackPower maps Chebyshev distance (1..3) to AoE damage per RANGED_ATTACK part.
+var RangedMassAttackPower = map[int]int{
+	1: 10,
+	2: 4,
+	3: 1,
+}
 
 // FIND_* constants matching Screeps Room.find() API.
 const (
