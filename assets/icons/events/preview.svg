@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="510" viewBox="0 0 1000 510">
+<rect width="1000" height="510" fill="#0a111a"/>
+<text x="28" y="38" font-family="DejaVu Sans" font-size="24" font-weight="bold" fill="#e5edf7" text-anchor="start">Event Feed / Icon system</text>
+<text x="28" y="61" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#94a3b8" text-anchor="start">SCREEPS VIEWER   ·   SB-1   ·   24 × 24 vector master / 14 × 14 display</text>
+<rect x="28" y="80" width="468" height="394" rx="9" fill="#101a26" stroke="#263749"/>
+<text x="45" y="108" font-family="DejaVu Sans" font-size="11" font-weight="bold" fill="#94a3b8" text-anchor="start">ACTIVE ENGINE EVENTS</text>
+<rect x="43" y="122" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(57 137) scale(1.25)"><path d="M12 2.8 L21 7.6 L21 16.4 L12 21.2 L3 16.4 L3 7.6 Z M3 7.6 L12 12.5 L21 7.6 M12 12.5 L12 21.2" fill="none" stroke="#4ade80" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(144 145) scale(0.5833333333333334)"><path d="M12 2.8 L21 7.6 L21 16.4 L12 21.2 L3 16.4 L3 7.6 Z M3 7.6 L12 12.5 L21 7.6 M12 12.5 L12 21.2" fill="none" stroke="#4ade80" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="57" y="188" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">spawn</text>
+<text x="57" y="205" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#4ade80" text-anchor="start">#4ade80</text>
+<rect x="192" y="122" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(206 137) scale(1.25)"><path d="M3.4 19.1 L12.8 9.7 L9.6 6.5 L13.6 2.5 L21.5 10.4 L17.5 14.4 L15.5 12.4 L6.1 21.8 Z" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(293 145) scale(0.5833333333333334)"><path d="M3.4 19.1 L12.8 9.7 L9.6 6.5 L13.6 2.5 L21.5 10.4 L17.5 14.4 L15.5 12.4 L6.1 21.8 Z" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="206" y="188" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">build</text>
+<text x="206" y="205" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#38bdf8" text-anchor="start">#38bdf8</text>
+<rect x="341" y="122" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(355 137) scale(1.25)"><path d="M4.2 10.5 L12 2.7 L19.8 10.5 M12 3.3 L12 17.4 M6.5 21 L17.5 21" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(442 145) scale(0.5833333333333334)"><path d="M4.2 10.5 L12 2.7 L19.8 10.5 M12 3.3 L12 17.4 M6.5 21 L17.5 21" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="355" y="188" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">rcl</text>
+<text x="355" y="205" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#38bdf8" text-anchor="start">#38bdf8</text>
+<rect x="43" y="226" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(57 241) scale(1.25)"><path d="M13.8 2.5 L4.8 13.3 L11 13.3 L9.9 21.5 L19.2 10.3 L12.8 10.3 Z" fill="none" stroke="#fbbf24" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(144 249) scale(0.5833333333333334)"><path d="M13.8 2.5 L4.8 13.3 L11 13.3 L9.9 21.5 L19.2 10.3 L12.8 10.3 Z" fill="none" stroke="#fbbf24" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="57" y="292" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">combat</text>
+<text x="57" y="309" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#fbbf24" text-anchor="start">#fbbf24</text>
+<rect x="192" y="226" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(206 241) scale(1.25)"><path d="M3 3 L7.2 4.1 L17.7 14.6 M21 3 L16.8 4.1 L6.3 14.6 M3 15.9 L8.1 21 M15.9 21 L21 15.9 M5.6 18.4 L3 21 M18.4 18.4 L21 21 M3 3 L4.1 7.2 L9 12.1 M21 3 L19.9 7.2 L15 12.1" fill="none" stroke="#c084fc" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(293 249) scale(0.5833333333333334)"><path d="M3 3 L7.2 4.1 L17.7 14.6 M21 3 L16.8 4.1 L6.3 14.6 M3 15.9 L8.1 21 M15.9 21 L21 15.9 M5.6 18.4 L3 21 M18.4 18.4 L21 21 M3 3 L4.1 7.2 L9 12.1 M21 3 L19.9 7.2 L15 12.1" fill="none" stroke="#c084fc" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="206" y="292" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">raid</text>
+<text x="206" y="309" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#c084fc" text-anchor="start">#c084fc</text>
+<rect x="341" y="226" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(355 241) scale(1.25)"><path d="M12 2.9 L21.5 20.5 L2.5 20.5 Z M12 9 L12 13.5 M12 17 L12 17.1" fill="none" stroke="#f87171" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(442 249) scale(0.5833333333333334)"><path d="M12 2.9 L21.5 20.5 L2.5 20.5 Z M12 9 L12 13.5 M12 17 L12 17.1" fill="none" stroke="#f87171" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="355" y="292" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">danger</text>
+<text x="355" y="309" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#f87171" text-anchor="start">#f87171</text>
+<text x="45" y="348" font-family="DejaVu Sans" font-size="11" font-weight="bold" fill="#94a3b8" text-anchor="start">OPTIONAL EVENTS</text>
+<rect x="43" y="362" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(57 377) scale(1.25)"><path d="M3.2 3.2 L20.8 3.2 L20.8 20.8 L3.2 20.8 Z M9.1 3.2 L9.1 20.8 M9.1 13 L20.8 13 M15 13 L15 20.8" fill="none" stroke="#a855f7" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(144 385) scale(0.5833333333333334)"><path d="M3.2 3.2 L20.8 3.2 L20.8 20.8 L3.2 20.8 Z M9.1 3.2 L9.1 20.8 M9.1 13 L20.8 13 M15 13 L15 20.8" fill="none" stroke="#a855f7" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="57" y="428" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">plan</text>
+<text x="57" y="445" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#a855f7" text-anchor="start">#a855f7</text>
+<rect x="192" y="362" width="137" height="93" rx="6" fill="#0c1520" stroke="#233243"/>
+<g transform="translate(206 377) scale(1.25)"><path d="M3 6.8 L19 6.8 L19 17.2 L3 17.2 Z M22 10 L22 14 M6.3 10.2 L6.3 13.8" fill="none" stroke="#94a3b8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<g transform="translate(293 385) scale(0.5833333333333334)"><path d="M3 6.8 L19 6.8 L19 17.2 L3 17.2 Z M22 10 L22 14 M6.3 10.2 L6.3 13.8" fill="none" stroke="#94a3b8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="206" y="428" font-family="DejaVu Sans Mono" font-size="14" font-weight="bold" fill="#e5edf7" text-anchor="start">economy</text>
+<text x="206" y="445" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#94a3b8" text-anchor="start">#94a3b8</text>
+<rect x="512" y="80" width="460" height="394" rx="9" fill="#101a26" stroke="#263749"/>
+<rect x="513" y="81" width="458" height="39" rx="8" fill="#152333" stroke="none"/>
+<text x="530" y="105" font-family="DejaVu Sans" font-size="15" font-weight="bold" fill="#e5edf7" text-anchor="start">⌃  Event Feed (Live)</text>
+<text x="953" y="104" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#94a3b8" text-anchor="end">14 px</text>
+<rect x="519" y="126" width="445" height="36" rx="4" fill="#0d1722" stroke="none"/>
+<g transform="translate(531 137) scale(0.5833333333333334)"><path d="M12 2.8 L21 7.6 L21 16.4 L12 21.2 L3 16.4 L3 7.6 Z M3 7.6 L12 12.5 L21 7.6 M12 12.5 L12 21.2" fill="none" stroke="#4ade80" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="147" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2416]</text>
+<text x="610" y="147" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">Spawned: harvester_1</text>
+<text x="952" y="147" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<g transform="translate(531 177) scale(0.5833333333333334)"><path d="M3.4 19.1 L12.8 9.7 L9.6 6.5 L13.6 2.5 L21.5 10.4 L17.5 14.4 L15.5 12.4 L6.1 21.8 Z" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="187" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2415]</text>
+<text x="610" y="187" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">LuaBot built extension</text>
+<text x="952" y="187" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<rect x="519" y="206" width="445" height="36" rx="4" fill="#0d1722" stroke="none"/>
+<g transform="translate(531 217) scale(0.5833333333333334)"><path d="M4.2 10.5 L12 2.7 L19.8 10.5 M12 3.3 L12 17.4 M6.5 21 L17.5 21" fill="none" stroke="#38bdf8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="227" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2414]</text>
+<text x="610" y="227" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">LuaBot reached RCL 4</text>
+<text x="952" y="227" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<g transform="translate(531 257) scale(0.5833333333333334)"><path d="M13.8 2.5 L4.8 13.3 L11 13.3 L9.9 21.5 L19.2 10.3 L12.8 10.3 Z" fill="none" stroke="#fbbf24" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="267" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2413]</text>
+<text x="610" y="267" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">RaiderBot R_skirmisher killed</text>
+<text x="952" y="267" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<rect x="519" y="286" width="445" height="36" rx="4" fill="#0d1722" stroke="none"/>
+<g transform="translate(531 297) scale(0.5833333333333334)"><path d="M3 3 L7.2 4.1 L17.7 14.6 M21 3 L16.8 4.1 L6.3 14.6 M3 15.9 L8.1 21 M15.9 21 L21 15.9 M5.6 18.4 L3 21 M18.4 18.4 L21 21 M3 3 L4.1 7.2 L9 12.1 M21 3 L19.9 7.2 L15 12.1" fill="none" stroke="#c084fc" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="307" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2412]</text>
+<text x="610" y="307" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">RaiderBot R_brawler entered W9N7</text>
+<text x="952" y="307" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N8</text>
+<g transform="translate(531 337) scale(0.5833333333333334)"><path d="M12 2.9 L21.5 20.5 L2.5 20.5 Z M12 9 L12 13.5 M12 17 L12 17.1" fill="none" stroke="#f87171" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="347" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2411]</text>
+<text x="610" y="347" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">RaiderBot tower destroyed</text>
+<text x="952" y="347" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<rect x="519" y="366" width="445" height="36" rx="4" fill="#0d1722" stroke="none"/>
+<g transform="translate(531 377) scale(0.5833333333333334)"><path d="M3.2 3.2 L20.8 3.2 L20.8 20.8 L3.2 20.8 Z M9.1 3.2 L9.1 20.8 M9.1 13 L20.8 13 M15 13 L15 20.8" fill="none" stroke="#a855f7" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="387" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2410]</text>
+<text x="610" y="387" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">Plan: ext ×2, road ×6</text>
+<text x="952" y="387" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<g transform="translate(531 417) scale(0.5833333333333334)"><path d="M3 6.8 L19 6.8 L19 17.2 L3 17.2 Z M22 10 L22 14 M6.3 10.2 L6.3 13.8" fill="none" stroke="#94a3b8" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></g>
+<text x="555" y="427" font-family="DejaVu Sans Mono" font-size="11" font-weight="normal" fill="#9aabbe" text-anchor="start">[2409]</text>
+<text x="610" y="427" font-family="DejaVu Sans" font-size="11.3" font-weight="normal" fill="#e5edf7" text-anchor="start">Energy low (620)</text>
+<text x="952" y="427" font-family="DejaVu Sans Mono" font-size="10" font-weight="normal" fill="#8fa8c4" text-anchor="end">W9N7</text>
+<text x="28" y="496" font-family="DejaVu Sans" font-size="11" font-weight="normal" fill="#94a3b8" text-anchor="start">Stroke 2.1 units  ·  Round caps &amp; joins  ·  Transparent backgrounds  ·  No glow</text>
+</svg>

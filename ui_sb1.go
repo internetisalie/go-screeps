@@ -1,9 +1,12 @@
 package main
 
 import (
+	_ "embed"
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go-screeps/internal/engine"
@@ -30,6 +33,68 @@ var (
 	sbIconStep  = iconStep()
 	sbIconReset = iconReset()
 )
+
+//go:embed assets/icons/events/event_icons.json
+var eventIconsJSON []byte
+
+type eventIconSpec struct {
+	path  *paint.Path
+	color geom.Color
+}
+
+var eventIconMap = loadEventIcons()
+
+func parseHexColor(s string, fallback geom.Color) geom.Color {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
+	if len(s) != 6 {
+		return fallback
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return fallback
+	}
+	return geom.Hex(uint32(v))
+}
+
+func loadEventIcons() map[string]eventIconSpec {
+	var manifest struct {
+		Icons map[string]struct {
+			Color string `json:"color"`
+			Path  string `json:"path"`
+		} `json:"icons"`
+	}
+	out := make(map[string]eventIconSpec)
+	if err := json.Unmarshal(eventIconsJSON, &manifest); err != nil {
+		return out
+	}
+	for k, v := range manifest.Icons {
+		if p, err := paint.ParseSVGPath(v.Path); err == nil && p != nil {
+			out[k] = eventIconSpec{
+				path:  p,
+				color: parseHexColor(v.Color, colTextMuted),
+			}
+		}
+	}
+	return out
+}
+
+type strokedEventIconPainter struct {
+	path  *paint.Path
+	color geom.Color
+}
+
+func (p strokedEventIconPainter) Paint(c *paint.Canvas, sz geom.Size) {
+	if p.path == nil || sz.W <= 0 || sz.H <= 0 {
+		return
+	}
+	scale := min(sz.W, sz.H) / 24.0
+	c.Save()
+	c.Scale(scale)
+	c.DrawPath(p.path, paint.Paint{
+		Stroke: &paint.Stroke{Width: 2.1, Color: p.color},
+	})
+	c.Restore()
+}
 
 // SB-1 dark sci-fi telemetry palette matching docs/mockups/SB-1.jpg.
 var (
@@ -482,18 +547,44 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 		for _, ev := range events {
 			targetRoom := ev.Room
 			evCol := colTextMuted
-			switch ev.Kind {
-			case "danger":
-				evCol = colRed
-			case "combat":
-				evCol = colAmber
-			case "raid":
-				evCol = geom.Hex(0xc084fc)
-			case "rcl", "spawn":
-				evCol = colGreen
-			case "build":
-				evCol = colCyan
+			var evIconWidget core.Widget
+			if spec, ok := eventIconMap[ev.Kind]; ok {
+				evCol = spec.color
+				evIconWidget = basic.SizedBox{
+					Width:  14,
+					Height: 14,
+					Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: spec.path, color: spec.color}},
+				}
+			} else {
+				switch ev.Kind {
+				case "danger":
+					evCol = colRed
+				case "combat":
+					evCol = colAmber
+				case "raid":
+					evCol = geom.Hex(0xc084fc)
+				case "rcl", "spawn":
+					evCol = colGreen
+				case "build":
+					evCol = colCyan
+				}
 			}
+			rowChildren := make([]core.Widget, 0, 3)
+			if evIconWidget != nil {
+				rowChildren = append(rowChildren, evIconWidget)
+			}
+			rowChildren = append(rowChildren,
+				basic.Expanded{
+					Child: basic.Text{
+						Content: fmt.Sprintf("[%d] %s", ev.Tick, ev.Message),
+						Style:   th.Text.Caption.WithMaxLines(1).WithColor(evCol),
+					},
+				},
+				basic.Text{
+					Content: "#" + ev.Room,
+					Style:   th.Text.Caption.WithColor(colTextMuted),
+				},
+			)
 			evRows = append(evRows, interact.GestureDetector{
 				OnTap: func() {
 					if targetRoom != "" {
@@ -506,20 +597,9 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 					Radius:  4,
 					Border:  paint.Stroke{Width: 1, Color: colBorderDim},
 					Child: basic.Row{
-						Cross:   layout.CrossCenter,
-						Spacing: 4,
-						Children: []core.Widget{
-							basic.Expanded{
-								Child: basic.Text{
-									Content: fmt.Sprintf("[%d] %s", ev.Tick, ev.Message),
-									Style:   th.Text.Caption.WithColor(evCol),
-								},
-							},
-							basic.Text{
-								Content: "#" + ev.Room,
-								Style:   th.Text.Caption.WithColor(colTextMuted),
-							},
-						},
+						Cross:    layout.CrossCenter,
+						Spacing:  6,
+						Children: rowChildren,
 					},
 				},
 			})
@@ -834,16 +914,17 @@ func (p *minimapPainter) Paint(c *paint.Canvas, sz geom.Size) {
 								}
 							}
 						}
+						// Low-brightness terrain palette so buildings (medium) and units (high) pop clearly.
 						var tileCol geom.Color
 						switch {
 						case walls >= (step*step)/2:
-							tileCol = geom.Hex(0x091019) // dark wall mass
+							tileCol = geom.Hex(0x070b11) // very dark wall mass
 						case swamps >= 5:
-							tileCol = geom.Hex(0x1e7a4d) // glowing emerald swamp patch (SB-1)
+							tileCol = geom.Hex(0x132b22) // muted dark emerald swamp
 						case swamps > 0:
-							tileCol = geom.Hex(0x144e34)
+							tileCol = geom.Hex(0x0f201b)
 						default:
-							tileCol = geom.Hex(0x132234) // walkable plain
+							tileCol = geom.Hex(0x0d1520) // dark walkable plain
 						}
 						c.DrawRect(geom.Rect{
 							X: ox + float32(sx)*subW,
@@ -857,45 +938,65 @@ func (p *minimapPainter) Paint(c *paint.Canvas, sz geom.Size) {
 				// Subtle territory wash for owned rooms.
 				if ctrl := rm.FindController(); ctrl != nil && ctrl.User != "" {
 					ownerName := w.Users[ctrl.User]
-					wash := geom.RGBA(0.66, 0.33, 0.97, 0.22) // rival purple
+					wash := geom.RGBA(0.66, 0.33, 0.97, 0.16) // rival purple
 					if ownerName == primaryOwner {
-						wash = geom.RGBA(0.22, 0.74, 0.97, 0.16) // friendly cyan
+						wash = geom.RGBA(0.22, 0.74, 0.97, 0.12) // friendly cyan
 					}
 					c.DrawRect(geom.Rect{X: ox, Y: oy, W: cellW, H: cellH}, mmFill(wash))
 				}
 
-				// Plot structures, sources, and creeps as crisp tactical blips.
+				// Pass 1: Medium-brightness buildings & muted sources.
 				for _, e := range rm.Entities {
+					if e.Type == engine.TYPE_CREEP {
+						continue
+					}
 					px := ox + (float32(e.X)+0.5)/iso.GridSize*cellW
 					py := oy + (float32(e.Y)+0.5)/iso.GridSize*cellH
 					var blipCol geom.Color
-					var bsz float32 = 2.0
+					var bsz float32 = 2.2
 					switch e.Type {
 					case engine.TYPE_SOURCE:
-						blipCol = geom.Hex(0xfbbf24)
-						bsz = 2.2
+						blipCol = geom.Hex(0x9a7820) // muted gold
+						bsz = 2.0
 					case engine.STRUCTURE_SPAWN, engine.STRUCTURE_CONTROLLER:
 						bsz = 3.2
 						if e.User == "" {
-							blipCol = geom.Hex(0x64748b)
+							blipCol = geom.Hex(0x475569)
 						} else if w.Users[e.User] == primaryOwner {
-							blipCol = geom.Hex(0x38bdf8)
+							blipCol = geom.Hex(0x2b82c9) // medium-bright blue
 						} else {
-							blipCol = geom.Hex(0xc084fc)
+							blipCol = geom.Hex(0x8e44c9) // medium-bright purple
 						}
-					case engine.TYPE_CREEP, engine.STRUCTURE_TOWER, engine.STRUCTURE_EXTENSION, engine.STRUCTURE_STORAGE:
-						bsz = 2.0
+					case engine.STRUCTURE_TOWER, engine.STRUCTURE_EXTENSION, engine.STRUCTURE_STORAGE,
+						engine.STRUCTURE_CONTAINER, engine.STRUCTURE_LINK, engine.STRUCTURE_EXTRACTOR:
+						bsz = 2.2
 						if w.Users[e.User] == primaryOwner {
-							blipCol = geom.Hex(0x4ade80)
+							blipCol = geom.Hex(0x1f6f99)
 						} else if e.User != "" {
-							blipCol = geom.Hex(0xf87171)
+							blipCol = geom.Hex(0x7332a8)
 						} else {
-							continue
+							blipCol = geom.Hex(0x3b4d63)
 						}
 					default:
 						continue
 					}
 					c.DrawRect(geom.Rect{X: px - bsz/2, Y: py - bsz/2, W: bsz, H: bsz}, mmFill(blipCol))
+				}
+
+				// Pass 2: High-brightness units (creeps) drawn on top so they pop immediately.
+				for _, e := range rm.Entities {
+					if e.Type != engine.TYPE_CREEP {
+						continue
+					}
+					px := ox + (float32(e.X)+0.5)/iso.GridSize*cellW
+					py := oy + (float32(e.Y)+0.5)/iso.GridSize*cellH
+					var unitCol geom.Color
+					if w.Users[e.User] == primaryOwner {
+						unitCol = geom.Hex(0x7efca0) // high-brightness neon green/cyan
+					} else {
+						unitCol = geom.Hex(0xff6b7a) // high-brightness crimson/coral
+					}
+					c.DrawRect(geom.Rect{X: px - 1.5, Y: py - 1.5, W: 3.0, H: 3.0}, mmFill(unitCol))
 				}
 			}
 
