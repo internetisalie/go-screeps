@@ -645,7 +645,9 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 		if s.orbiting {
 			dx := e.Pos.X - s.lastPos.X
 			s.lastPos = e.Pos
-			s.cam.OrbitYaw(-dx * 0.008)
+			s.SetState(func() {
+				s.cam.OrbitYaw(-dx * 0.008)
+			})
 			s.signal.Notify()
 			return
 		}
