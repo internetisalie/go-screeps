@@ -53,25 +53,12 @@ local function makeRoleCounter()
     }
 end
 
----@type table<BodyPartType, integer>
-local FALLBACK_PART_COST = {
-    work = 100,
-    carry = 50,
-    move = 50,
-    attack = 80,
-    ranged_attack = 150,
-    heal = 250,
-    claim = 600,
-    tough = 10,
-}
-
 ---@param body BodyPartType[]
 ---@return integer
 local function bodyCost(body)
-    local costs = COST or FALLBACK_PART_COST
     local total = 0
     for _, part in ipairs(body) do
-        total = total + (costs[part] or 0)
+        total = total + (COST[part] or 0)
     end
     return total
 end

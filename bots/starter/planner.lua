@@ -27,11 +27,7 @@ local PathFinder <const> = screeps.PathFinder
 ---@field LINK_LIMITS table<integer, integer>
 local M = {}
 
-local STRUCT_STORAGE = STRUCTURE.STORAGE
-local STRUCT_LINK = STRUCTURE.LINK
-local STRUCT_RAMPART = STRUCTURE.RAMPART
-
-local MAX_EXT_SITES_PER_RUN = 5
+local MAX_EXT_SITES_PER_RUN <const> = 5
 local MAX_ROAD_SITES_PER_RUN = 6
 local MAX_RAMPART_SITES_PER_RUN = 2
 
@@ -133,7 +129,7 @@ local function scanRoomState(room)
 
         if stype == STRUCTURE.ROAD then
             hasRoad[key] = true
-        elseif stype == STRUCT_RAMPART then
+        elseif stype == STRUCTURE.RAMPART then
             hasRampart[key] = true
         else
             solid[key] = stype
@@ -141,9 +137,9 @@ local function scanRoomState(room)
 
         if stype == STRUCTURE.CONTAINER then
             table.insert(containers, pos)
-        elseif stype == STRUCT_LINK then
+        elseif stype == STRUCTURE.LINK then
             table.insert(links, pos)
-        elseif stype == STRUCT_STORAGE then
+        elseif stype == STRUCTURE.STORAGE then
             storagePos = pos
             table.insert(keyStructures, pos)
         elseif stype == STRUCTURE.SPAWN or stype == STRUCTURE.TOWER then
@@ -365,16 +361,16 @@ end
 
 -- Plan Storage at RCL >= 4 near Spawn1.
 local function planStorage(room, terrain, state, spawn)
-    if (state.counts[STRUCT_STORAGE] or 0) >= 1 then
+    if (state.counts[STRUCTURE.STORAGE] or 0) >= 1 then
         return
     end
     local towards = (room.controller and room.controller.pos) or nil
     local sx, sy = findBestTileNear(terrain, state, spawn.pos, towards, 2, 4)
     if sx and sy then
-        if room:createConstructionSite(sx, sy, STRUCT_STORAGE) == OK then
+        if room:createConstructionSite(sx, sy, STRUCTURE.STORAGE) == OK then
             local key = tileKey(sx, sy)
-            state.solid[key] = STRUCT_STORAGE
-            state.counts[STRUCT_STORAGE] = 1
+            state.solid[key] = STRUCTURE.STORAGE
+            state.counts[STRUCTURE.STORAGE] = 1
             state.storagePos = { x = sx, y = sy }
             table.insert(state.keyStructures, state.storagePos)
         end
@@ -384,7 +380,7 @@ end
 -- Plan Links at RCL >= 5 (hub link near storage/spawn, controller link, source links).
 local function planLinks(room, terrain, state, spawn, sources, rcl)
     local limit = M.LINK_LIMITS[rcl] or 0
-    local current = state.counts[STRUCT_LINK] or 0
+    local current = state.counts[STRUCTURE.LINK] or 0
     if current >= limit then
         return
     end
@@ -398,11 +394,11 @@ local function planLinks(room, terrain, state, spawn, sources, rcl)
         end
         local lx, ly = findBestTileNear(terrain, state, anchorPos, towardsPos, 1, maxRange)
         if lx and ly then
-            if room:createConstructionSite(lx, ly, STRUCT_LINK) == OK then
+            if room:createConstructionSite(lx, ly, STRUCTURE.LINK) == OK then
                 local key = tileKey(lx, ly)
-                state.solid[key] = STRUCT_LINK
+                state.solid[key] = STRUCTURE.LINK
                 current = current + 1
-                state.counts[STRUCT_LINK] = current
+                state.counts[STRUCTURE.LINK] = current
                 table.insert(state.links, { x = lx, y = ly })
             end
         end
@@ -434,7 +430,7 @@ local function planRamparts(room, state)
         end
         local key = tileKey(pos.x, pos.y)
         if not state.hasRampart[key] then
-            if room:createConstructionSite(pos.x, pos.y, STRUCT_RAMPART) == OK then
+            if room:createConstructionSite(pos.x, pos.y, STRUCTURE.RAMPART) == OK then
                 state.hasRampart[key] = true
                 placed = placed + 1
             end
@@ -532,7 +528,7 @@ local function ensurePlan(room, spawn, terrain)
     -- 2. Storage near spawn towards controller.
     local stx, sty = findBestTileNear(terrain, vState, spawn.pos, ctrlPos, 2, 4)
     if stx and sty then
-        reserved[tileKey(stx, sty)] = STRUCT_STORAGE
+        reserved[tileKey(stx, sty)] = STRUCTURE.STORAGE
         plan.storage = { x = stx, y = sty }
     end
 
@@ -592,7 +588,7 @@ local function ensurePlan(room, spawn, terrain)
         end
         local lx, ly = findBestTileNear(terrain, vState, anchorPos, towardsPos, 1, maxRange)
         if lx and ly then
-            reserved[tileKey(lx, ly)] = STRUCT_LINK
+            reserved[tileKey(lx, ly)] = STRUCTURE.LINK
             table.insert(plan.links, { x = lx, y = ly })
         end
     end
@@ -754,12 +750,12 @@ function M.planRoom(room, rcl)
 
     -- 4. Storage at RCL >= 4.
     if rcl >= 4 then
-        if plan and plan.storage and (state.counts[STRUCT_STORAGE] or 0) < 1 then
+        if plan and plan.storage and (state.counts[STRUCTURE.STORAGE] or 0) < 1 then
             local key = tileKey(plan.storage.x, plan.storage.y)
             if not state.solid[key] then
-                if room:createConstructionSite(plan.storage.x, plan.storage.y, STRUCT_STORAGE) == OK then
-                    state.solid[key] = STRUCT_STORAGE
-                    state.counts[STRUCT_STORAGE] = 1
+                if room:createConstructionSite(plan.storage.x, plan.storage.y, STRUCTURE.STORAGE) == OK then
+                    state.solid[key] = STRUCTURE.STORAGE
+                    state.counts[STRUCTURE.STORAGE] = 1
                     state.storagePos = { x = plan.storage.x, y = plan.storage.y }
                     table.insert(state.keyStructures, state.storagePos)
                 end
@@ -772,7 +768,7 @@ function M.planRoom(room, rcl)
     -- 5. Links at RCL >= 5.
     if rcl >= 5 then
         local linkLimit = M.LINK_LIMITS[rcl] or 0
-        local curLinks = state.counts[STRUCT_LINK] or 0
+        local curLinks = state.counts[STRUCTURE.LINK] or 0
         if plan and plan.links and curLinks < linkLimit then
             for _, pt in ipairs(plan.links) do
                 if curLinks >= linkLimit then
@@ -780,10 +776,10 @@ function M.planRoom(room, rcl)
                 end
                 local key = tileKey(pt.x, pt.y)
                 if not state.solid[key] then
-                    if room:createConstructionSite(pt.x, pt.y, STRUCT_LINK) == OK then
-                        state.solid[key] = STRUCT_LINK
+                    if room:createConstructionSite(pt.x, pt.y, STRUCTURE.LINK) == OK then
+                        state.solid[key] = STRUCTURE.LINK
                         curLinks = curLinks + 1
-                        state.counts[STRUCT_LINK] = curLinks
+                        state.counts[STRUCTURE.LINK] = curLinks
                         table.insert(state.links, { x = pt.x, y = pt.y })
                     end
                 end
@@ -843,7 +839,7 @@ function M.drawPlanVisuals(room)
         local key = tileKey(pos.x, pos.y)
         if stype == STRUCTURE.ROAD then
             hasRoad[key] = true
-        elseif stype == STRUCT_RAMPART then
+        elseif stype == STRUCTURE.RAMPART then
             hasRampart[key] = true
         else
             solid[key] = true

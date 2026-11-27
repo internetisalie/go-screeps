@@ -18,13 +18,8 @@ local STRUCTURE <const> = screeps.STRUCTURE
 ---@class StarterRoles
 local M = {}
 
-local STRUCT_STORAGE = STRUCTURE.STORAGE
-local STRUCT_LINK = STRUCTURE.LINK
-local STRUCT_RAMPART = STRUCTURE.RAMPART
-local STRUCT_WALL = STRUCTURE.WALL
-
 ---@type table<integer, FindConstant>
-local EXIT_DIRS = {
+local EXIT_DIRS <const> = {
     [1] = FIND.EXIT_TOP,
     [3] = FIND.EXIT_RIGHT,
     [5] = FIND.EXIT_BOTTOM,
@@ -271,7 +266,7 @@ local function findRoomStorage(room)
         return nil
     end
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCT_STORAGE then
+        if s.structureType == STRUCTURE.STORAGE then
             return s
         end
     end
@@ -359,7 +354,7 @@ local function findEnergyDeliveryTarget(creep, opts)
                 if getFreeEnergy(s.store) > 50 then
                     table.insert(towers, s)
                 end
-            elseif s.structureType == STRUCT_STORAGE then
+            elseif s.structureType == STRUCTURE.STORAGE then
                 storage = s
             end
         end
@@ -441,7 +436,7 @@ local function acquireWorkerEnergy(creep, preferControllerSupply)
     if preferControllerSupply and ctrl and ctrl.pos then
         local myStructs = creep.room:find(FIND.MY_STRUCTURES) or {}
         for _, s in ipairs(myStructs) do
-            if s.structureType == STRUCT_LINK and s.pos and ctrl.pos:getRangeTo(s) <= 3 then
+            if s.structureType == STRUCTURE.LINK and s.pos and ctrl.pos:getRangeTo(s) <= 3 then
                 if getUsedEnergy(s.store) > 0 then
                     drawTargetLine(creep, s, "#b388ff")
                     if creep:withdraw(s, RESOURCE.ENERGY) == ERR.NOT_IN_RANGE then
@@ -597,7 +592,7 @@ function M.miner(creep)
     if getUsedEnergy(creep.store) > 0 then
         local myStructs = creep.room:find(FIND.MY_STRUCTURES) or {}
         for _, s in ipairs(myStructs) do
-            if s.structureType == STRUCT_LINK and s.pos and creep.pos:getRangeTo(s) <= 1 then
+            if s.structureType == STRUCTURE.LINK and s.pos and creep.pos:getRangeTo(s) <= 1 then
                 if getFreeEnergy(s.store) > 0 then
                     drawTargetLine(creep, s, "#b388ff")
                     creep:transfer(s, RESOURCE.ENERGY)
@@ -741,11 +736,11 @@ end
 local function sitePriority(stype)
     if stype == STRUCTURE.SPAWN or stype == STRUCTURE.EXTENSION or stype == STRUCTURE.TOWER then
         return 1
-    elseif stype == STRUCTURE.CONTAINER or stype == STRUCT_STORAGE or stype == STRUCT_LINK then
+    elseif stype == STRUCTURE.CONTAINER or stype == STRUCTURE.STORAGE or stype == STRUCTURE.LINK then
         return 2
     elseif stype == STRUCTURE.ROAD then
         return 3
-    elseif stype == STRUCT_RAMPART then
+    elseif stype == STRUCTURE.RAMPART then
         return 4
     end
     return 5
@@ -800,12 +795,12 @@ function M.builder(creep)
 
     for _, s in ipairs(structures) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCT_RAMPART then
+            if s.structureType == STRUCTURE.RAMPART then
                 if s.hits < lowestRampartHits and s.hits < s.hitsMax then
                     lowestRampartHits = s.hits
                     worstRampart = s
                 end
-            elseif s.structureType ~= STRUCT_WALL then
+            elseif s.structureType ~= STRUCTURE.WALL then
                 local ratio = s.hits / s.hitsMax
                 if ratio < worstRatio then
                     worstRatio = ratio
@@ -837,7 +832,7 @@ local function findCombatRampart(creep, target, maxEngageRange)
     local best = nil
     local bestDist = 999
     for _, s in ipairs(myStructs) do
-        if s.structureType == STRUCT_RAMPART and s.pos and not isOnEdge(s.pos) then
+        if s.structureType == STRUCTURE.RAMPART and s.pos and not isOnEdge(s.pos) then
             local distToTarget = s.pos:getRangeTo(target)
             if distToTarget <= maxEngageRange then
                 local distToCreep = creep.pos:getRangeTo(s)
