@@ -1078,22 +1078,29 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 		Child: basic.SizedBox{
 			Width:  mmW,
 			Height: mmH,
-			Child: interact.Listener{
-				OnPointer: func(e *core.PointerEvent) {
-					switch e.Kind {
-					case core.PointerDown:
-						if target := roomAt(e.Pos); target != "" && target != s.snap.Room {
-							s.switchRoom(target)
-						}
-					case core.PointerMove:
-						if hr := roomAt(e.Pos); hr != s.hoverMinimapRoom {
-							s.SetState(func() { s.hoverMinimapRoom = hr })
-						}
+			Child: interact.MouseRegion{
+				OnHover: func(pos geom.Offset) {
+					if hr := roomAt(pos); hr != s.hoverMinimapRoom {
+						s.SetState(func() { s.hoverMinimapRoom = hr })
 					}
 				},
-				Child: control.CustomPaint{
-					Painter: &minimapPainter{state: s},
-					Repaint: &s.signal,
+				OnExit: func() {
+					if s.hoverMinimapRoom != "" {
+						s.SetState(func() { s.hoverMinimapRoom = "" })
+					}
+				},
+				Child: interact.Listener{
+					OnPointer: func(e *core.PointerEvent) {
+						if e.Kind == core.PointerDown {
+							if target := roomAt(e.Pos); target != "" && target != s.snap.Room {
+								s.switchRoom(target)
+							}
+						}
+					},
+					Child: control.CustomPaint{
+						Painter: &minimapPainter{state: s},
+						Repaint: &s.signal,
+					},
 				},
 			},
 		},
@@ -1103,9 +1110,38 @@ func (s *viewerState) buildSB1Minimap(th *theme.Theme) core.Widget {
 // Viewport with edge neighbor-room pills, top-right Tower DPS legend, bottom-left Hover card, and bottom-right floating Selection card.
 func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 	layers := []core.Widget{
-		interact.Listener{
-			OnPointer: s.handlePointer,
-			Child:     control.CustomPaint{Painter: s.painter, Repaint: &s.signal},
+		interact.MouseRegion{
+			OnHover: func(pos geom.Offset) {
+				if s.dragging || s.orbiting || s.painter.LastSize.W <= 0 {
+					return
+				}
+				hitRoom, gx, gy, ok := s.cam.ScreenToWorldTile(pos, s.painter.LastSize, &s.snap, s.painter.Neighbors)
+				if !ok || (hitRoom != "" && hitRoom != s.snap.Room) {
+					gx, gy, hitRoom = -1, -1, ""
+				}
+				if gx != s.cam.HoverX || gy != s.cam.HoverY || hitRoom != s.hoverRoom {
+					s.SetState(func() {
+						s.cam.HoverX = gx
+						s.cam.HoverY = gy
+						s.hoverRoom = hitRoom
+					})
+					s.signal.Notify()
+				}
+			},
+			OnExit: func() {
+				if s.cam.HoverX >= 0 || s.cam.HoverY >= 0 {
+					s.SetState(func() {
+						s.cam.HoverX = -1
+						s.cam.HoverY = -1
+						s.hoverRoom = ""
+					})
+					s.signal.Notify()
+				}
+			},
+			Child: interact.Listener{
+				OnPointer: s.handlePointer,
+				Child:     control.CustomPaint{Painter: s.painter, Repaint: &s.signal},
+			},
 		},
 	}
 
@@ -1190,26 +1226,35 @@ func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 				return "↗"
 			}
 		}
+		sz := s.painter.LastSize
 		for _, dir := range [][2]int{{0, -1}, {1, 0}, {0, 1}, {-1, 0}} {
 			dx, dy := dir[0], dir[1]
 			adj, ok := engine.AdjacentRoomName(s.snap.Room, dx, dy)
 			if !ok {
 				continue
 			}
-			// Project unit neighbor direction through camera yaw + isometric basis.
+			// Project unit neighbor direction through camera yaw + isometric basis for compass arrow.
 			rx := float32(dx)*cosY - float32(dy)*sinY
 			ry := float32(dx)*sinY + float32(dy)*cosY
 			sx := (rx - ry) * (iso.BaseW / 2)
 			sy := (rx + ry) * (iso.BaseH / 2)
-			mag := float32(math.Hypot(float64(sx), float64(sy)))
-			if mag <= 0 {
-				continue
+
+			var ax, ay float32
+			if sz.W > 0 && sz.H > 0 {
+				// Anchor directly on the corresponding cyan room border midpoint (just outside the edge).
+				edgeX := float32(24.5) + float32(dx)*25.5
+				edgeY := float32(24.5) + float32(dy)*25.5
+				pt := s.cam.TileToScreen(edgeX, edgeY, sz)
+				ax = geom.Clamp32(pt.X/sz.W, 0.03, 0.97)
+				ay = geom.Clamp32(pt.Y/sz.H, 0.04, 0.96)
+			} else {
+				mag := float32(math.Hypot(float64(sx), float64(sy)))
+				if mag <= 0 {
+					continue
+				}
+				ax = geom.Clamp32(0.5+(sx/mag)*0.36, 0.04, 0.96)
+				ay = geom.Clamp32(0.5+(sy/mag)*0.36, 0.04, 0.96)
 			}
-			ux, uy := sx/mag, sy/mag
-			// Map unit screen direction onto the viewport perimeter [0..1]x[0..1],
-			// inset slightly so diagonal pills sit cleanly along the 4 isometric edges.
-			ax := geom.Clamp32(0.5+ux*0.44, 0.04, 0.96)
-			ay := geom.Clamp32(0.5+uy*0.44, 0.04, 0.96)
 			arr := compassArrow(sx, sy)
 			label := arr + " " + adj
 			if sx > 0 {
@@ -1219,7 +1264,7 @@ func (s *viewerState) buildSB1Viewport(th *theme.Theme) core.Widget {
 			layers = append(layers, basic.Align{
 				Alignment: layout.Alignment{X: ax, Y: ay},
 				Child: basic.Container{
-					Padding: geom.All(6),
+					Padding: geom.All(4),
 					Child:   sbPill(label, false, func() { s.switchRoom(target) }, th),
 				},
 			})

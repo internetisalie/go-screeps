@@ -155,6 +155,18 @@ func (cam *Camera) CenterOnTile(x, y int) {
 	cam.PanY = -(rx + ry) * halfH
 }
 
+// TileToScreen projects fractional room tile coordinates (gx, gy) into viewport pixel coordinates.
+func (cam Camera) TileToScreen(gx, gy float32, sz geom.Size) geom.Offset {
+	cosY, sinY := cam.YawCosSin()
+	rx, ry := rotateYawF(gx, gy, cosY, sinY)
+	halfW := (BaseW / 2) * cam.Zoom
+	halfH := (BaseH / 2) * cam.Zoom
+	return geom.Offset{
+		X: sz.W/2 + cam.PanX + (rx-ry)*halfW,
+		Y: sz.H/2 + cam.PanY + (rx+ry)*halfH,
+	}
+}
+
 // unrotateCoord maps rotated grid coordinates (rx, ry) back to room tile (x, y).
 func unrotateCoord(rx, ry, rot int) (int, int) {
 	switch ((rot % 4) + 4) % 4 {

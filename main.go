@@ -676,9 +676,11 @@ func (s *viewerState) handlePointer(e *core.PointerEvent) {
 			s.dragMoved = true
 			s.followCam = false
 		}
-		s.cam.PanX += dx
-		s.cam.PanY += dy
-		s.recenterOnPan()
+		s.SetState(func() {
+			s.cam.PanX += dx
+			s.cam.PanY += dy
+			s.recenterOnPan()
+		})
 		s.signal.Notify()
 	case core.PointerUp, core.PointerCancel:
 		wasClick := s.dragging && !s.dragMoved && e.Kind == core.PointerUp
