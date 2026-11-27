@@ -187,7 +187,7 @@ function Game.getObjectById(id) end
 ---@field LINK_CAPACITY integer
 ---@field TOWER_CAPACITY integer
 
----@class ScreepsModule
+---@class screeps
 ---@field OK ScreepsReturnCode
 ---@field ERR ScreepsErr
 ---@field DIR ScreepsDir
@@ -201,7 +201,7 @@ function Game.getObjectById(id) end
 ---@field CONST ScreepsConst
 ---@field Game Game
 ---@field Memory Memory
----@field PathFinder PathFinderAPI
+---@field PathFinder PathFinder
 local screeps = {}
 
 ---Construct a new RoomPosition.

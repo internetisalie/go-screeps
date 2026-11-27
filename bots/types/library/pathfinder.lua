@@ -1,7 +1,7 @@
 ---@meta
 --- PathFinder and PathFinder.CostMatrix definitions for go-screeps.
 
----@class PathFinderCostMatrix
+---@class CostMatrix
 local CostMatrix = {}
 
 ---Set movement cost (0..255; 255 = impassable) at tile (x, y).
@@ -17,7 +17,7 @@ function CostMatrix:set(x, y, cost) end
 function CostMatrix:get(x, y) end
 
 ---Create a copy of this CostMatrix.
----@return PathFinderCostMatrix
+---@return CostMatrix
 function CostMatrix:clone() end
 
 ---@class PathFinderGoal
@@ -32,7 +32,7 @@ function CostMatrix:clone() end
 ---@field maxRooms? integer
 ---@field maxCost? integer
 ---@field heuristicWeight? number
----@field roomCallback? fun(roomName: string): PathFinderCostMatrix|boolean|nil
+---@field roomCallback? fun(roomName: string): CostMatrix|boolean|nil
 
 ---@class PathFinderResult
 ---@field path RoomPosition[]
@@ -40,8 +40,8 @@ function CostMatrix:clone() end
 ---@field cost integer
 ---@field incomplete boolean
 
----@class PathFinderAPI
----@field CostMatrix { new: fun(): PathFinderCostMatrix }|fun(): PathFinderCostMatrix
+---@class PathFinder
+---@field CostMatrix { new: fun(): CostMatrix }|fun(): CostMatrix
 local PathFinder = {}
 
 ---Compute an optimal path from origin to goal (or list of goals) using Go-native A*.

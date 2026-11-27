@@ -20,38 +20,38 @@
 ---@field x integer
 ---@field y integer
 ---@field roomName string
-local RoomPositionProto = {}
+local RoomPosition = {}
 
 ---Chebyshev distance to another position or RoomObject (or x, y coordinates).
 ---@overload fun(self: RoomPosition, x: integer, y: integer): integer
 ---@param target RoomObject|RoomPosition|PosLike
 ---@return integer
-function RoomPositionProto:getRangeTo(target) end
+function RoomPosition:getRangeTo(target) end
 
 ---Returns true if Chebyshev distance to target is <= 1.
 ---@overload fun(self: RoomPosition, x: integer, y: integer): boolean
 ---@param target RoomObject|RoomPosition|PosLike
 ---@return boolean
-function RoomPositionProto:isNearTo(target) end
+function RoomPosition:isNearTo(target) end
 
 ---Returns true if Chebyshev distance to target is <= range.
 ---@overload fun(self: RoomPosition, x: integer, y: integer, range: integer): boolean
 ---@param target RoomObject|RoomPosition|PosLike
 ---@param range integer
 ---@return boolean
-function RoomPositionProto:inRangeTo(target, range) end
+function RoomPosition:inRangeTo(target, range) end
 
 ---Returns true if coordinates (and roomName when present) match.
 ---@overload fun(self: RoomPosition, x: integer, y: integer): boolean
 ---@param target RoomObject|RoomPosition|PosLike
 ---@return boolean
-function RoomPositionProto:isEqualTo(target) end
+function RoomPosition:isEqualTo(target) end
 
 ---Finds the closest object from a list (or FIND_* constant) by Chebyshev range.
 ---@generic T: RoomObject|PosLike
 ---@param targets T[]|FindConstant
 ---@return T|nil
-function RoomPositionProto:findClosestByRange(targets) end
+function RoomPosition:findClosestByRange(targets) end
 
 ---@class RoomTerrain
 local RoomTerrain = {}
