@@ -1097,7 +1097,7 @@ func (s *viewerState) buildInspector(th *theme.Theme) core.Widget {
 			if s.localRunner != nil && (selObj.Type == "creep" || selObj.Type == "powerCreep") {
 				creepMem = s.localRunner.CreepMemoryJSON(selObj.User, selObj.Name)
 			}
-			lines = append(lines, buildObjectCard(selObj, s.snap.Users, s.snap.GameTime, creepMem, th))
+			lines = append(lines, buildObjectCard(selObj, s.snap.Users, s.snap.GameTime, creepMem, nil, th))
 		} else {
 			lines = append(lines, basic.Text{
 				Content: "No objects on this tile.",
@@ -1325,7 +1325,7 @@ func (s *viewerState) buildBotBrainCard(bs lua.BotSummary, th *theme.Theme) core
 	}
 }
 
-func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime int64, creepMemJSON string, th *theme.Theme) core.Widget {
+func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime int64, creepMemJSON string, trailing core.Widget, th *theme.Theme) core.Widget {
 	// 1. Static Identity & Specs
 	headerIcon := entityIconBadge(obj, 26, 16)
 	if headerIcon == nil {
@@ -1339,35 +1339,39 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			},
 		}
 	}
-	staticRows := []core.Widget{
-		basic.Row{
-			Cross:   layout.CrossCenter,
-			Spacing: theme.Space8,
-			Children: []core.Widget{
-				headerIcon,
-				basic.Expanded{
-					Child: basic.Column{
-						Size:    layout.MainMin,
-						Cross:   layout.CrossStart,
-						Spacing: 1,
-						Children: []core.Widget{
-							basic.Text{
-								Content: func() string {
-									if obj.Name != "" {
-										return obj.Name
-									}
-									return obj.ID
-								}(),
-								Style: th.Text.Body.WithWeight(600).WithColor(th.Color.Ink),
-							},
-							basic.Text{
-								Content: obj.Type,
-								Style:   th.Text.Caption.WithSize(10).WithColor(th.Color.Ink2),
-							},
-						},
+	headerRowChildren := []core.Widget{
+		headerIcon,
+		basic.Expanded{
+			Child: basic.Column{
+				Size:    layout.MainMin,
+				Cross:   layout.CrossStart,
+				Spacing: 1,
+				Children: []core.Widget{
+					basic.Text{
+						Content: func() string {
+							if obj.Name != "" {
+								return obj.Name
+							}
+							return obj.ID
+						}(),
+						Style: th.Text.Body.WithWeight(600).WithColor(th.Color.Ink),
+					},
+					basic.Text{
+						Content: obj.Type,
+						Style:   th.Text.Caption.WithSize(10).WithColor(th.Color.Ink2),
 					},
 				},
 			},
+		},
+	}
+	if trailing != nil {
+		headerRowChildren = append(headerRowChildren, trailing)
+	}
+	staticRows := []core.Widget{
+		basic.Row{
+			Cross:    layout.CrossCenter,
+			Spacing:  theme.Space8,
+			Children: headerRowChildren,
 		},
 	}
 

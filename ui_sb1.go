@@ -32,7 +32,13 @@ var (
 	sbIconPause = iconPause()
 	sbIconStep  = iconStep()
 	sbIconReset = iconReset()
+	sbIconEye   = mustSVGPath("M2 12 C5 6.5 9 4.5 12 4.5 C15 4.5 19 6.5 22 12 C19 17.5 15 19.5 12 19.5 C9 19.5 5 17.5 2 12 Z M12 8.8 C13.8 8.8 15.2 10.2 15.2 12 C15.2 13.8 13.8 15.2 12 15.2 C10.2 15.2 8.8 13.8 8.8 12 C8.8 10.2 10.2 8.8 12 8.8 Z")
 )
+
+func mustSVGPath(d string) *paint.Path {
+	p, _ := paint.ParseSVGPath(d)
+	return p
+}
 
 //go:embed assets/icons/events/event_icons.json
 var eventIconsJSON []byte
@@ -1496,29 +1502,58 @@ func (s *viewerState) buildFloatingSelectionCard(th *theme.Theme) core.Widget {
 		}
 
 		selObj := tileObjs[s.selectedStackIdx]
+		var followToggle core.Widget
 		if selObj.Type == "creep" || selObj.Type == "powerCreep" {
 			following := s.followCam && s.cam.FollowID == selObj.ID
-			followLbl := "◎ Follow"
+			tip := "Follow creep"
+			bg := colPillIdleBg
+			bd := colPillIdleBd
+			fg := colTextMuted
 			if following {
-				followLbl = "● Following"
+				tip = "Following creep (click to unfollow)"
+				bg = colPillActBg
+				bd = colPillActBd
+				fg = geom.Hex(0xffffff)
 			}
 			targetID := selObj.ID
-			rows = append(rows, sbPill(followLbl, following, func() {
-				s.SetState(func() {
-					if s.followCam && s.cam.FollowID == targetID {
-						s.followCam = false
-					} else {
-						s.cam.FollowID = targetID
-						s.followCam = true
-					}
-				})
-			}, th))
+			followToggle = overlay.Tooltip{
+				Message: tip,
+				Child: interact.GestureDetector{
+					OnTap: func() {
+						s.SetState(func() {
+							if s.followCam && s.cam.FollowID == targetID {
+								s.followCam = false
+							} else {
+								s.cam.FollowID = targetID
+								s.followCam = true
+							}
+						})
+					},
+					Child: basic.SizedBox{
+						Width:  26,
+						Height: 26,
+						Child: basic.Container{
+							Color:  bg,
+							Radius: 5,
+							Border: paint.Stroke{Width: 1, Color: bd},
+							Child: basic.Align{
+								Alignment: layout.AlignCenter,
+								Child: basic.SizedBox{
+									Width:  16,
+									Height: 16,
+									Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: sbIconEye, color: fg}},
+								},
+							},
+						},
+					},
+				},
+			}
 		}
 		var creepMem string
 		if s.localRunner != nil && (selObj.Type == "creep" || selObj.Type == "powerCreep") {
 			creepMem = s.localRunner.CreepMemoryJSON(selObj.User, selObj.Name)
 		}
-		rows = append(rows, buildObjectCard(selObj, s.snap.Users, s.snap.GameTime, creepMem, th))
+		rows = append(rows, buildObjectCard(selObj, s.snap.Users, s.snap.GameTime, creepMem, followToggle, th))
 	} else {
 		rows = append(rows, basic.Text{
 			Content: "Empty tile.",
