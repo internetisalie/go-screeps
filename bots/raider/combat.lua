@@ -1,14 +1,16 @@
--- combat.lua: Home defense, tower control, cross-room scouting, and aggressive raiding squads.
+-- combat.lua: Home defense, tower control, cross-room scouting, and synchronized raiding squads.
 -- Roles: defender, scout, brawler, skirmisher, medic.
--- Strict Lua 5.1 (gopher-lua compatible).
+-- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
 
+---@class RaiderCombat
 local M = {}
 
+---@type table<integer, FindConstant>
 local EXIT_DIRS = {
-    [1] = FIND_EXIT_TOP or 1,
-    [3] = FIND_EXIT_RIGHT or 3,
-    [5] = FIND_EXIT_BOTTOM or 5,
-    [7] = FIND_EXIT_LEFT or 7,
+    [1] = FIND_EXIT_TOP,
+    [3] = FIND_EXIT_RIGHT,
+    [5] = FIND_EXIT_BOTTOM,
+    [7] = FIND_EXIT_LEFT,
 }
 
 local function getUsedEnergy(store)

@@ -1,11 +1,31 @@
--- defense.lua: Threat tracking, coordinated tower defense, and defender body builder.
--- Compatible with standard Lua 5.1 / gopher-lua.
+-- defense.lua: Object-oriented room threat tracking, tower focus-fire, Safe Mode, and combat body builders.
+-- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
 
-local M = {}
+---@class ThreatState
+---@field level integer 0=none, 1=weak (<=60), 2=normal (<=200), 3=strong (>200)
+---@field count integer
+---@field strength integer
+---@field lastSeen integer
 
-local STRUCT_RAMPART = STRUCTURE_RAMPART or "rampart"
-local STRUCT_WALL = STRUCTURE_WALL or "constructedWall"
+---@class DefenseManager
+---@field room Room
+---@field threatLevel integer
+---@field enemyStrength integer
+---@field hostiles Creep[]
+local DefenseManager = {}
+DefenseManager.__index = DefenseManager
 
+---@type table<BodyPartType, integer>
+local PART_STRENGTH = {
+    attack = 30,
+    ranged_attack = 10,
+    heal = 12,
+    work = 50,
+    claim = 15,
+}
+
+---@param store? Store
+---@return integer
 local function getUsedEnergy(store)
     if not store then
         return 0
@@ -13,6 +33,8 @@ local function getUsedEnergy(store)
     return store:getUsedCapacity(RESOURCE_ENERGY) or 0
 end
 
+---@param roomName string
+---@return table<string, any>|nil
 local function ensureRoomMemory(roomName)
     if not Memory then
         return nil
@@ -26,15 +48,9 @@ local function ensureRoomMemory(roomName)
     return Memory.rooms[roomName]
 end
 
-local PART_STRENGTH = {
-    attack = 30,
-    ranged_attack = 10,
-    heal = 12,
-    work = 50,
-    claim = 15,
-}
-
--- Compute Hivemind-style part-weighted combat strength for a hostile creep.
+---Compute Hivemind-style part-weighted combat strength for a hostile creep.
+---@param creep Creep
+---@return integer
 local function scoreHostileCreep(creep)
     if not creep or not creep.body then
         return 0
@@ -50,26 +66,100 @@ local function scoreHostileCreep(creep)
             end
         end
         if active and ptype then
-            if ptype == ATTACK or ptype == "attack" then
-                score = score + PART_STRENGTH.attack
-            elseif ptype == RANGED_ATTACK or ptype == "ranged_attack" then
-                score = score + PART_STRENGTH.ranged_attack
-            elseif ptype == HEAL or ptype == "heal" then
-                score = score + PART_STRENGTH.heal
-            elseif ptype == WORK or ptype == "work" then
-                score = score + PART_STRENGTH.work
-            elseif ptype == CLAIM or ptype == "claim" then
-                score = score + PART_STRENGTH.claim
+            local w = PART_STRENGTH[ptype]
+            if w then
+                score = score + w
             end
         end
     end
     return score
 end
 
--- Assess hostile presence and record threat level & part-weighted strength in Memory.rooms[room.name].
--- Returns: threatLevel (0=none, 1=weak <=60, 2=normal <=200, 3=strong >200), hostiles array.
-function M.assessThreat(room)
-    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
+---Pick a single focus-fire target (lowest HP, tie-broken by closeness to anchor).
+---@param hostiles Creep[]
+---@param anchorPos? RoomPosition
+---@return Creep|nil
+local function selectFocusHostile(hostiles, anchorPos)
+    local best = nil
+    local bestScore = 999999999
+
+    for _, h in ipairs(hostiles) do
+        local hp = h.hits or 100
+        local dist = 0
+        if anchorPos and h.pos then
+            dist = anchorPos:getRangeTo(h) or 0
+        end
+        local score = hp + dist * 25
+        if score < bestScore then
+            bestScore = score
+            best = h
+        end
+    end
+
+    return best
+end
+
+---Select the most critical structure for tower repair.
+---@param room Room
+---@return Structure|nil
+local function selectTowerRepairTarget(room)
+    local structures = room:find(FIND_STRUCTURES) ---@type Structure[]
+    if not structures or #structures == 0 then
+        return nil
+    end
+
+    local criticalRampart = nil
+    local lowestRampartHits = 15000
+    local worstRegular = nil
+    local worstRegularRatio = 0.8
+
+    for _, s in ipairs(structures) do
+        if s.hits and s.hitsMax and s.hitsMax > 0 then
+            if s.structureType == STRUCTURE_RAMPART then
+                if s.hits < lowestRampartHits and s.hits < s.hitsMax then
+                    lowestRampartHits = s.hits
+                    criticalRampart = s
+                end
+            elseif s.structureType ~= STRUCTURE_WALL then
+                local ratio = s.hits / s.hitsMax
+                if ratio < worstRegularRatio then
+                    worstRegularRatio = ratio
+                    worstRegular = s
+                end
+            end
+        end
+    end
+
+    if criticalRampart and criticalRampart.hits < 5000 then
+        return criticalRampart
+    end
+    if worstRegular and worstRegular.hits < worstRegular.hitsMax * 0.5 then
+        return worstRegular
+    end
+    if criticalRampart then
+        return criticalRampart
+    end
+    return worstRegular
+end
+
+---Construct a DefenseManager bound to a specific owned Room.
+---@param room Room
+---@return DefenseManager
+function DefenseManager.new(room)
+    return setmetatable({
+        room = room,
+        threatLevel = 0,
+        enemyStrength = 0,
+        hostiles = {},
+    }, DefenseManager)
+end
+
+---Assess hostile presence and record threat state in Memory.rooms[room.name].
+---@return integer threatLevel
+---@return Creep[] hostiles
+function DefenseManager:assessThreat()
+    local room = self.room
+    local hostiles = room:find(FIND_HOSTILE_CREEPS) or {} ---@type Creep[]
     local count = #hostiles
     local enemyStrength = 0
     local level = 0
@@ -78,7 +168,6 @@ function M.assessThreat(room)
         for _, c in ipairs(hostiles) do
             enemyStrength = enemyStrength + scoreHostileCreep(c)
         end
-
         if enemyStrength > 200 then
             level = 3
         elseif enemyStrength > 60 then
@@ -87,6 +176,10 @@ function M.assessThreat(room)
             level = 1
         end
     end
+
+    self.threatLevel = level
+    self.enemyStrength = enemyStrength
+    self.hostiles = hostiles
 
     local rmem = room.name and ensureRoomMemory(room.name)
     if rmem then
@@ -102,23 +195,157 @@ function M.assessThreat(room)
     return level, hostiles
 end
 
--- Determine desired number of defender creeps for the room based on threat level and hostile count (up to 4).
-function M.desiredDefenders(threatLevel, hostiles)
-    if threatLevel == 0 or not hostiles or #hostiles == 0 then
+---Determine desired number of defender creeps for the room based on assessed threat (up to 4).
+---@return integer
+function DefenseManager:desiredDefenders()
+    if self.threatLevel == 0 or #self.hostiles == 0 then
         return 0
     end
-    local count = #hostiles
-    if threatLevel >= 3 then
+    local count = #self.hostiles
+    if self.threatLevel >= 3 then
         return math.min(4, math.max(3, count))
-    elseif threatLevel == 2 then
+    elseif self.threatLevel == 2 then
         return math.min(3, math.max(2, count))
     end
     return math.min(2, math.max(1, count))
 end
 
--- Build a combat defender body scaled to available energy budget.
--- Uses TOUGH (10), ATTACK (80), RANGED_ATTACK (150), MOVE (50).
-function M.buildDefenderBody(budget)
+---Run coordinated tower actions: focus-fire hostiles -> heal friendlies -> repair critical structures.
+function DefenseManager:runTowers()
+    local room = self.room
+    local myStructures = room:find(FIND_MY_STRUCTURES) ---@type Structure[]
+    if not myStructures or #myStructures == 0 then
+        return
+    end
+
+    ---@type StructureTower[]
+    local towers = {}
+    for _, s in ipairs(myStructures) do
+        if s.structureType == STRUCTURE_TOWER then
+            table.insert(towers, s --[[@as StructureTower]])
+        end
+    end
+    if #towers == 0 then
+        return
+    end
+
+    -- 1. Coordinated focus-fire on hostiles.
+    if #self.hostiles > 0 then
+        local spawns = room:find(FIND_MY_SPAWNS) ---@type StructureSpawn[]
+        local anchor = (spawns and spawns[1] and spawns[1].pos) or towers[1].pos
+        local primaryTarget = selectFocusHostile(self.hostiles, anchor)
+
+        if primaryTarget then
+            for _, tower in ipairs(towers) do
+                tower:attack(primaryTarget)
+                if room.visual and primaryTarget.pos then
+                    room.visual:line(tower.pos.x, tower.pos.y, primaryTarget.pos.x, primaryTarget.pos.y, {
+                        color = "#ef5350",
+                        width = 0.16,
+                        opacity = 0.85,
+                    })
+                end
+            end
+        end
+        return
+    end
+
+    -- 2. Heal most injured friendly creep.
+    local myCreeps = room:find(FIND_MY_CREEPS) or {} ---@type Creep[]
+    local mostInjured = nil
+    local lowestRatio = 1.0
+    for _, c in ipairs(myCreeps) do
+        if c.hits and c.hitsMax and c.hitsMax > 0 and c.hits < c.hitsMax then
+            local ratio = c.hits / c.hitsMax
+            if ratio < lowestRatio then
+                lowestRatio = ratio
+                mostInjured = c
+            end
+        end
+    end
+
+    if mostInjured then
+        for _, tower in ipairs(towers) do
+            tower:heal(mostInjured)
+            if room.visual and mostInjured.pos then
+                room.visual:line(tower.pos.x, tower.pos.y, mostInjured.pos.x, mostInjured.pos.y, {
+                    color = "#66bb6a",
+                    width = 0.12,
+                    opacity = 0.75,
+                })
+            end
+        end
+        return
+    end
+
+    -- 3. Repair critical structures while keeping an energy reserve for defense.
+    local repairTarget = selectTowerRepairTarget(room)
+    if repairTarget then
+        for _, tower in ipairs(towers) do
+            if getUsedEnergy(tower.store) > 300 then
+                tower:repair(repairTarget)
+                if room.visual and repairTarget.pos then
+                    room.visual:line(tower.pos.x, tower.pos.y, repairTarget.pos.x, repairTarget.pos.y, {
+                        color = "#ffa726",
+                        width = 0.1,
+                        opacity = 0.5,
+                    })
+                end
+            end
+        end
+    end
+end
+
+---Activate Safe Mode if the Spawn is damaged or threatened with no active defenders.
+---@param defenderCount integer
+---@return boolean
+function DefenseManager:checkSafeMode(defenderCount)
+    local room = self.room
+    if not room or self.threatLevel == 0 or #self.hostiles == 0 then
+        return false
+    end
+    local ctrl = room.controller
+    if not ctrl or not ctrl.my or not ctrl.activateSafeMode then
+        return false
+    end
+    if ctrl.safeMode and ctrl.safeMode > 0 then
+        return false
+    end
+    if ctrl.safeModeCooldown and ctrl.safeModeCooldown > 0 then
+        return false
+    end
+    if (ctrl.safeModeAvailable or 0) <= 0 then
+        return false
+    end
+
+    local spawns = room:find(FIND_MY_SPAWNS) or {} ---@type StructureSpawn[]
+    local spawn = spawns[1]
+    if not spawn then
+        return false
+    end
+
+    local needSafeMode = false
+    if spawn.hits and spawn.hitsMax and spawn.hits < spawn.hitsMax then
+        needSafeMode = true
+    elseif (defenderCount or 0) == 0 and spawn.pos then
+        for _, h in ipairs(self.hostiles) do
+            if h.pos and spawn.pos:getRangeTo(h) <= 4 then
+                needSafeMode = true
+                break
+            end
+        end
+    end
+
+    if needSafeMode then
+        return ctrl:activateSafeMode() == OK
+    end
+    return false
+end
+
+---Build a combat defender body scaled to available energy budget.
+---@param budget integer
+---@return BodyPartType[]|nil
+function DefenseManager.buildDefenderBody(budget)
     if budget < 130 then
         return nil
     end
@@ -126,9 +353,13 @@ function M.buildDefenderBody(budget)
         return { ATTACK, MOVE }
     end
 
+    ---@type BodyPartType[]
     local body = {}
     local cost = 0
 
+    ---@param parts BodyPartType[]
+    ---@param partCost integer
+    ---@return boolean
     local function addParts(parts, partCost)
         if cost + partCost <= budget and (#body + #parts) <= 16 then
             for _, p in ipairs(parts) do
@@ -140,7 +371,6 @@ function M.buildDefenderBody(budget)
         return false
     end
 
-    -- Lead with a high-DPS melee bruiser package scaled for early RCL 2-3 raid defense.
     if budget >= 510 then
         addParts({ TOUGH, TOUGH, ATTACK, ATTACK, ATTACK, MOVE, MOVE, MOVE, MOVE, MOVE }, 510)
     elseif budget >= 320 then
@@ -149,7 +379,6 @@ function M.buildDefenderBody(budget)
         addParts({ TOUGH, ATTACK, MOVE, MOVE }, 190)
     end
 
-    -- Scale up alternating melee and ranged packages.
     local addRanged = false
     while #body <= 12 do
         local added
@@ -166,7 +395,7 @@ function M.buildDefenderBody(budget)
         addRanged = not addRanged
     end
 
-    -- Sort TOUGH parts to the front so they absorb damage first.
+    ---@type BodyPartType[]
     local ordered = {}
     for _, p in ipairs(body) do
         if p == TOUGH then
@@ -182,11 +411,14 @@ function M.buildDefenderBody(budget)
     return ordered
 end
 
--- Build a heavy offensive assault bruiser body (TOUGH + ATTACK + 1:1 MOVE, up to 24 parts).
-function M.buildAssaultBody(budget)
+---Build a heavy offensive assault bruiser body (TOUGH + ATTACK + 1:1 MOVE, up to 24 parts).
+---@param budget integer
+---@return BodyPartType[]|nil
+function DefenseManager.buildAssaultBody(budget)
     if budget < 320 then
         return nil
     end
+    ---@type BodyPartType[]
     local body = {}
     local cost = 0
     local toughCount = math.min(4, math.floor(budget / 280))
@@ -217,11 +449,14 @@ function M.buildAssaultBody(budget)
     return body
 end
 
--- Build a combat healer body (HEAL + 1:1 MOVE, up to 20 parts) for assault squads.
-function M.buildHealerBody(budget)
+---Build a combat healer body (HEAL + 1:1 MOVE, up to 20 parts) for assault squads.
+---@param budget integer
+---@return BodyPartType[]|nil
+function DefenseManager.buildHealerBody(budget)
     if budget < 300 then
         return nil
     end
+    ---@type BodyPartType[]
     local body = {}
     local cost = 0
     local healCount = 0
@@ -245,195 +480,4 @@ function M.buildHealerBody(budget)
     return body
 end
 
--- Pick a single focus-fire target (lowest HP, tie-broken by closeness to anchor).
-local function selectFocusHostile(hostiles, anchorPos)
-    local best = nil
-    local bestScore = 999999999
-
-    for _, h in ipairs(hostiles) do
-        local hp = h.hits or 100
-        local dist = 0
-        if anchorPos and h.pos then
-            dist = anchorPos:getRangeTo(h) or 0
-        end
-        -- Strongly prefer damaged/weakest hostile, with distance tie-breaker.
-        local score = hp + dist * 25
-        if score < bestScore then
-            bestScore = score
-            best = h
-        end
-    end
-
-    return best
-end
-
--- Select the most critical structure for tower repair.
-local function selectTowerRepairTarget(room)
-    local structures = room:find(FIND_STRUCTURES)
-    if not structures or #structures == 0 then
-        return nil
-    end
-
-    local criticalRampart = nil
-    local lowestRampartHits = 15000
-    local worstRegular = nil
-    local worstRegularRatio = 0.8
-
-    for _, s in ipairs(structures) do
-        if s.hits and s.hitsMax and s.hitsMax > 0 then
-            if s.structureType == STRUCT_RAMPART then
-                -- Keep ramparts above emergency decay threshold.
-                if s.hits < lowestRampartHits and s.hits < s.hitsMax then
-                    lowestRampartHits = s.hits
-                    criticalRampart = s
-                end
-            elseif s.structureType ~= STRUCT_WALL then
-                local ratio = s.hits / s.hitsMax
-                if ratio < worstRegularRatio then
-                    worstRegularRatio = ratio
-                    worstRegular = s
-                end
-            end
-        end
-    end
-
-    if criticalRampart and criticalRampart.hits < 5000 then
-        return criticalRampart
-    end
-    if worstRegular and worstRegular.hits < worstRegular.hitsMax * 0.5 then
-        return worstRegular
-    end
-    if criticalRampart then
-        return criticalRampart
-    end
-    return worstRegular
-end
-
--- Run coordinated tower actions: focus-fire hostiles -> heal friendlies -> repair critical structures.
-function M.runTowers(room, hostiles)
-    local myStructures = room:find(FIND_MY_STRUCTURES)
-    if not myStructures or #myStructures == 0 then
-        return
-    end
-
-    local towers = {}
-    for _, s in ipairs(myStructures) do
-        if s.structureType == STRUCTURE_TOWER then
-            table.insert(towers, s)
-        end
-    end
-    if #towers == 0 then
-        return
-    end
-
-    -- 1. Coordinated focus-fire on hostiles.
-    if hostiles and #hostiles > 0 then
-        local spawns = room:find(FIND_MY_SPAWNS)
-        local anchor = (spawns and spawns[1] and spawns[1].pos) or towers[1].pos
-        local primaryTarget = selectFocusHostile(hostiles, anchor)
-
-        if primaryTarget then
-            for _, tower in ipairs(towers) do
-                tower:attack(primaryTarget)
-                if room.visual and primaryTarget.pos then
-                    room.visual:line(tower.pos.x, tower.pos.y, primaryTarget.pos.x, primaryTarget.pos.y, {
-                        color = "#ef5350",
-                        width = 0.16,
-                        opacity = 0.85,
-                    })
-                end
-            end
-        end
-        return
-    end
-
-    -- 2. Heal most injured friendly creep.
-    local myCreeps = room:find(FIND_MY_CREEPS) or {}
-    local mostInjured = nil
-    local lowestRatio = 1.0
-    for _, c in ipairs(myCreeps) do
-        if c.hits and c.hitsMax and c.hitsMax > 0 and c.hits < c.hitsMax then
-            local ratio = c.hits / c.hitsMax
-            if ratio < lowestRatio then
-                lowestRatio = ratio
-                mostInjured = c
-            end
-        end
-    end
-
-    if mostInjured then
-        for _, tower in ipairs(towers) do
-            tower:heal(mostInjured)
-            if room.visual and mostInjured.pos then
-                room.visual:line(tower.pos.x, tower.pos.y, mostInjured.pos.x, mostInjured.pos.y, {
-                    color = "#66bb6a",
-                    width = 0.12,
-                    opacity = 0.75,
-                })
-            end
-        end
-        return
-    end
-
-    -- 3. Repair critical ramparts, roads, containers, and structures (keeping energy reserve for defense).
-    local repairTarget = selectTowerRepairTarget(room)
-    if repairTarget then
-        for _, tower in ipairs(towers) do
-            if getUsedEnergy(tower.store) > 300 then
-                tower:repair(repairTarget)
-                if room.visual and repairTarget.pos then
-                    room.visual:line(tower.pos.x, tower.pos.y, repairTarget.pos.x, repairTarget.pos.y, {
-                        color = "#ffa726",
-                        width = 0.1,
-                        opacity = 0.5,
-                    })
-                end
-            end
-        end
-    end
-end
-
--- Activate Safe Mode (Hivemind RoomDefense trigger) if Spawn is damaged or threatened with no defenders.
-function M.checkSafeMode(room, threatLevel, hostiles, defenderCount)
-    if not room or threatLevel == 0 or not hostiles or #hostiles == 0 then
-        return false
-    end
-    local ctrl = room.controller
-    if not ctrl or not ctrl.my or not ctrl.activateSafeMode then
-        return false
-    end
-    if ctrl.safeMode and ctrl.safeMode > 0 then
-        return false
-    end
-    if ctrl.safeModeCooldown and ctrl.safeModeCooldown > 0 then
-        return false
-    end
-    if (ctrl.safeModeAvailable or 0) <= 0 then
-        return false
-    end
-
-    local spawns = room:find(FIND_MY_SPAWNS) or {}
-    local spawn = spawns[1]
-    if not spawn then
-        return false
-    end
-
-    local needSafeMode = false
-    if spawn.hits and spawn.hitsMax and spawn.hits < spawn.hitsMax then
-        needSafeMode = true
-    elseif (defenderCount or 0) == 0 and spawn.pos then
-        for _, h in ipairs(hostiles) do
-            if h.pos and spawn.pos:getRangeTo(h) <= 4 then
-                needSafeMode = true
-                break
-            end
-        end
-    end
-
-    if needSafeMode then
-        return ctrl:activateSafeMode() == OK
-    end
-    return false
-end
-
-return M
+return DefenseManager

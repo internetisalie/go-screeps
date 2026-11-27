@@ -1,19 +1,27 @@
 -- roles.lua: Full colony creep role behaviors for Screeps.
--- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler.
--- Compatible with standard Lua 5.1 / gopher-lua.
+-- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler, assault, healer.
+-- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
 
+---@class RoomIntelEntry
+---@field owner? string
+---@field sources integer
+---@field hostiles integer
+---@field lastSeen integer
+
+---@class StarterRoles
 local M = {}
 
-local STRUCT_STORAGE = STRUCTURE_STORAGE or "storage"
-local STRUCT_LINK = STRUCTURE_LINK or "link"
-local STRUCT_RAMPART = STRUCTURE_RAMPART or "rampart"
-local STRUCT_WALL = STRUCTURE_WALL or "constructedWall"
+local STRUCT_STORAGE = STRUCTURE_STORAGE
+local STRUCT_LINK = STRUCTURE_LINK
+local STRUCT_RAMPART = STRUCTURE_RAMPART
+local STRUCT_WALL = STRUCTURE_WALL
 
+---@type table<integer, FindConstant>
 local EXIT_DIRS = {
-    [1] = FIND_EXIT_TOP or 1,
-    [3] = FIND_EXIT_RIGHT or 3,
-    [5] = FIND_EXIT_BOTTOM or 5,
-    [7] = FIND_EXIT_LEFT or 7,
+    [1] = FIND_EXIT_TOP,
+    [3] = FIND_EXIT_RIGHT,
+    [5] = FIND_EXIT_BOTTOM,
+    [7] = FIND_EXIT_LEFT,
 }
 
 local SCOUT_INTEL_TTL = 1500
@@ -107,6 +115,8 @@ local function moveAcrossExit(creep, targetRoom, fallbackDir)
 end
 
 -- Record room intel into Memory.roomIntel[room.name] (deduplicated per tick).
+---Record visible room intelligence (owner, source count, hostiles, tick) into Memory.roomIntel.
+---@param room Room
 function M.recordRoomIntel(room)
     if not room or not room.name or not Memory then
         return
@@ -1599,7 +1609,8 @@ function M.healer(creep)
     end
 end
 
--- Dispatcher for running any creep according to creep.memory.role.
+---Dispatcher for running any creep according to creep.memory.role.
+---@param creep Creep
 function M.run(creep)
     if not creep or not creep.memory then
         return

@@ -1,8 +1,9 @@
 -- planner.lua: Compact, aggressive base layout planner for the Raider colony.
 -- Places source containers, fast roads, tight checkerboard extensions around spawn,
 -- defensive tower(s) + ramparts at RCL 3+, and storage at RCL 4+.
--- Strict Lua 5.1 (gopher-lua compatible).
+-- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
 
+---@class RaiderPlanner
 local M = {}
 
 local MAX_ACTIVE_SITES = 6

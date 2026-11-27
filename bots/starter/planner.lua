@@ -1,11 +1,29 @@
 -- planner.lua: Full RCL 1-8 automated room planner for Screeps.
--- Compatible with standard Lua 5.1 / gopher-lua.
+-- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
 
+---@class PlanCoord
+---@field x integer
+---@field y integer
+
+---@class RoomPlan
+---@field spawn PlanCoord
+---@field storage? PlanCoord
+---@field containers PlanCoord[]
+---@field extensions PlanCoord[]
+---@field towers PlanCoord[]
+---@field links PlanCoord[]
+---@field roads PlanCoord[]
+---@field ramparts PlanCoord[]
+
+---@class StarterPlanner
+---@field EXTENSION_LIMITS table<integer, integer>
+---@field TOWER_LIMITS table<integer, integer>
+---@field LINK_LIMITS table<integer, integer>
 local M = {}
 
-local STRUCT_STORAGE = STRUCTURE_STORAGE or "storage"
-local STRUCT_LINK = STRUCTURE_LINK or "link"
-local STRUCT_RAMPART = STRUCTURE_RAMPART or "rampart"
+local STRUCT_STORAGE = STRUCTURE_STORAGE
+local STRUCT_LINK = STRUCTURE_LINK
+local STRUCT_RAMPART = STRUCTURE_RAMPART
 
 local MAX_EXT_SITES_PER_RUN = 5
 local MAX_ROAD_SITES_PER_RUN = 6
@@ -73,6 +91,9 @@ local function getRoomMemory(room)
 end
 
 -- Find the primary spawn for a room (preferring Spawn1 if present).
+---Return the room's primary owned Spawn, if any.
+---@param room Room
+---@return StructureSpawn|nil
 function M.getPrimarySpawn(room)
     local spawns = room:find(FIND_MY_SPAWNS)
     if not spawns or #spawns == 0 then
@@ -622,6 +643,9 @@ local function ensurePlan(room, spawn, terrain)
 end
 
 -- Main room planning entry point (call periodically, e.g. every 25 ticks).
+---Plan structures and place construction sites for the room at the given RCL.
+---@param room Room
+---@param rcl integer
 function M.planRoom(room, rcl)
     if not room then
         return
@@ -789,6 +813,8 @@ function M.planRoom(room, rcl)
 end
 
 -- Draw translucent blueprint overlays for unbuilt planned slots from cached room.memory.plan.
+---Render translucent RoomVisual blueprints for the room's planned layout.
+---@param room Room
 function M.drawPlanVisuals(room)
     if not room or not room.visual then
         return

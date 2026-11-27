@@ -78,6 +78,7 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		{"roles", "starter/roles.lua"},
 		{"planner", "starter/planner.lua"},
 		{"defense", "starter/defense.lua"},
+		{"colony", "starter/colony.lua"},
 	}
 
 	for _, mod := range modules {
@@ -417,6 +418,7 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 		{"economy", "raider/economy.lua"},
 		{"planner", "raider/planner.lua"},
 		{"combat", "raider/combat.lua"},
+		{"colony", "raider/colony.lua"},
 	} {
 		src, err := fs.ReadFile(RaiderFS, mod.path)
 		if err != nil {
