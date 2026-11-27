@@ -1595,7 +1595,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 func bodyPartLetter(typ string) (string, geom.Color) {
 	switch typ {
 	case "tough":
-		return "T", geom.Hex(0xffffff)
+		return "T", geom.Hex(0x111827)
 	case "work":
 		return "W", geom.Hex(0x111827)
 	case "carry":
@@ -1620,7 +1620,6 @@ func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 		typ  string
 		dead bool
 	}
-	counts := map[string]int{}
 	parts := make([]partInfo, 0, len(body))
 	for _, item := range body {
 		m, ok := item.(map[string]any)
@@ -1628,7 +1627,6 @@ func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 			continue
 		}
 		typ, _ := m["type"].(string)
-		counts[typ]++
 		dead := false
 		if hits, ok := m["hits"].(float64); ok && hits <= 0 {
 			dead = true
@@ -1668,33 +1666,6 @@ func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 		})
 	}
 
-	keys := make([]string, 0, len(counts))
-	for k := range counts {
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return bodyPartOrder(keys[i]) < bodyPartOrder(keys[j])
-	})
-	var legend []core.Widget
-	for _, k := range keys {
-		legend = append(legend, basic.Row{
-			Size:    layout.MainMin,
-			Cross:   layout.CrossCenter,
-			Spacing: 3,
-			Children: []core.Widget{
-				basic.SizedBox{
-					Width:  7,
-					Height: 7,
-					Child:  basic.Container{Color: bodyPartColor(k), Radius: 3.5},
-				},
-				basic.Text{
-					Content: fmt.Sprintf("%d×%s", counts[k], k),
-					Style:   th.Text.Caption.WithColor(th.Color.Ink2),
-				},
-			},
-		})
-	}
-
 	headerRow := []core.Widget{
 		basic.Expanded{
 			Child: basic.Text{
@@ -1723,11 +1694,6 @@ func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 				Spacing:    3,
 				RunSpacing: 3,
 				Children:   cells,
-			},
-			basic.Wrap{
-				Spacing:    8,
-				RunSpacing: 2,
-				Children:   legend,
 			},
 		},
 	}
