@@ -5,13 +5,30 @@
 local screeps <const> = require("screeps")
 
 local RaiderColony <const> = require("colony")
-local economy <const> = require("economy")
-local combat <const> = require("combat")
+local EconomyAgent <const> = require("economy")
+local CombatAgent <const> = require("combat")
 
----Remove stale Memory.creeps entries and initialize top-level Raider Memory tables.
+---@class RaiderBot
+---@field game Game
+---@field memory Memory
+local RaiderBot = {}
+RaiderBot.__index = RaiderBot
+
+---Construct a RaiderBot tick runner bound to Game and Memory.
 ---@param game Game
 ---@param memory Memory
-local function cleanupMemory(game, memory)
+---@return RaiderBot
+function RaiderBot.new(game, memory)
+    return setmetatable({
+        game = game,
+        memory = memory,
+    }, RaiderBot)
+end
+
+---Remove stale Memory.creeps entries and initialize top-level Raider Memory tables.
+function RaiderBot:cleanupMemory()
+    local game = self.game
+    local memory = self.memory
     if not memory.creeps then
         memory.creeps = {}
     else
@@ -30,8 +47,8 @@ local function cleanupMemory(game, memory)
 end
 
 ---Adopt any owned creep missing creep.memory.role.
----@param game Game
-local function adoptUnassignedCreeps(game)
+function RaiderBot:adoptUnassignedCreeps()
+    local game = self.game
     if not game.creeps then
         return
     end
@@ -76,18 +93,17 @@ local function adoptUnassignedCreeps(game)
     end
 end
 
----Main tick entry point invoked every tick by the Screeps Lua engine.
----@param game Game
----@param memory Memory
-local function loop(game, memory)
-    cleanupMemory(game, memory)
-    adoptUnassignedCreeps(game)
+---Execute one full tick of the Raider colony AI.
+function RaiderBot:run()
+    self:cleanupMemory()
+    self:adoptUnassignedCreeps()
 
+    local game = self.game
     local globalCounts = RaiderColony.countGlobalRoles()
 
     if game.rooms then
         for _, room in pairs(game.rooms) do
-            combat.updateIntel(room)
+            CombatAgent.updateIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
                 or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
@@ -100,14 +116,19 @@ local function loop(game, memory)
         for _, creep in pairs(game.creeps) do
             local role = creep.memory and creep.memory.role
             if role == "harvester" or role == "hauler" or role == "upgrader" or role == "builder" then
-                economy.run(creep)
+                EconomyAgent.run(creep)
             else
-                combat.run(creep)
+                CombatAgent.run(creep)
             end
         end
     end
 end
 
 return {
-    loop = loop,
+    ---Main tick entry point invoked every tick by the Screeps Lua engine.
+    ---@param game Game
+    ---@param memory Memory
+    loop = function(game, memory)
+        RaiderBot.new(game, memory):run()
+    end,
 }

@@ -1,16 +1,37 @@
--- economy.lua: Lean, fast-bootstrapping economy for the Raider colony.
+-- economy.lua: Object-oriented EconomyAgent for the Raider colony.
 -- Roles: harvester, hauler, builder, upgrader.
 -- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 local screeps <const> = require("screeps")
 
----@class RaiderEconomy
-local M = {}
+---@type table<StructureType, integer>
+local SITE_PRIORITY <const> = {
+    [screeps.STRUCTURE.TOWER or "tower"] = 1,
+    [screeps.STRUCTURE.EXTENSION or "extension"] = 2,
+    [screeps.STRUCTURE.CONTAINER or "container"] = 3,
+    [screeps.STRUCTURE.STORAGE or "storage"] = 4,
+    [screeps.STRUCTURE.RAMPART or "rampart"] = 5,
+    [screeps.STRUCTURE.ROAD or "road"] = 6,
+}
+
+---@class EconomyRoomCache
+---@field haulerCount integer|nil
+---@field [string] any
 
 local _cacheTick = -1
+---@type table<string, EconomyRoomCache>
 local _roomCache = {}
 
-local function getRoomCache(room)
+---@class EconomyAgent
+---@field creep Creep
+---@field room Room
+---@field memory table<string, any>
+local EconomyAgent = {}
+EconomyAgent.__index = EconomyAgent
+
+---@param room Room
+---@return EconomyRoomCache
+function EconomyAgent.getRoomCache(room)
     local t = screeps.Game.time or 0
     if t ~= _cacheTick then
         _cacheTick = t
@@ -25,8 +46,12 @@ local function getRoomCache(room)
     return c
 end
 
-local function cachedFind(room, key, findConst)
-    local c = getRoomCache(room)
+---@param room Room
+---@param key string
+---@param findConst FindConstant
+---@return any[]
+function EconomyAgent.cachedFind(room, key, findConst)
+    local c = EconomyAgent.getRoomCache(room)
     local v = c[key]
     if v == nil then
         v = room:find(findConst) or {}
@@ -35,32 +60,30 @@ local function cachedFind(room, key, findConst)
     return v
 end
 
-local SITE_PRIORITY = {
-    [screeps.STRUCTURE.TOWER or "tower"] = 1,
-    [screeps.STRUCTURE.EXTENSION or "extension"] = 2,
-    [screeps.STRUCTURE.CONTAINER or "container"] = 3,
-    [screeps.STRUCTURE.STORAGE or "storage"] = 4,
-    [screeps.STRUCTURE.RAMPART or "rampart"] = 5,
-    [screeps.STRUCTURE.ROAD or "road"] = 6,
-}
-
-local function getUsedEnergy(store)
+---@param store Store|nil
+---@return integer
+function EconomyAgent.getUsedEnergy(store)
     if not store or not store.getUsedCapacity then
         return 0
     end
     return store:getUsedCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
-local function getFreeEnergy(store)
+---@param store Store|nil
+---@return integer
+function EconomyAgent.getFreeEnergy(store)
     if not store or not store.getFreeCapacity then
         return 0
     end
     return store:getFreeCapacity(screeps.RESOURCE.ENERGY) or 0
 end
 
--- Build a harvester body: fast mobile worker during bootstrap (no hauler),
--- or high-WORK dedicated source miner once haulers are running.
-function M.buildHarvesterBody(budget, hasHauler)
+---Build a harvester body: fast mobile worker during bootstrap (no hauler),
+---or high-WORK dedicated source miner once haulers are running.
+---@param budget integer
+---@param hasHauler boolean
+---@return BodyPartType[]|nil
+function EconomyAgent.buildHarvesterBody(budget, hasHauler)
     if budget < 200 then
         return nil
     end
@@ -74,11 +97,12 @@ function M.buildHarvesterBody(budget, hasHauler)
         return { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE }
     end
 
+    ---@type BodyPartType[]
     local body = {}
     local cost = 0
 
     -- Scale WORK up to 5 (full 10 energy/tick source drain).
-    local maxWork = math.min(5, math.floor((budget - 100) / 100))
+    local maxWork = math.min(5, (budget - 100) // 100)
     if maxWork < 2 then
         maxWork = 2
     end
@@ -103,8 +127,10 @@ function M.buildHarvesterBody(budget, hasHauler)
     return body
 end
 
--- Build a fast 1:1 CARRY/MOVE hauler body (never slows down off-road).
-function M.buildHaulerBody(budget)
+---Build a fast 1:1 CARRY/MOVE hauler body (never slows down off-road).
+---@param budget integer
+---@return BodyPartType[]|nil
+function EconomyAgent.buildHaulerBody(budget)
     if budget < 150 then
         if budget >= 100 then
             return { screeps.PART.CARRY, screeps.PART.MOVE }
@@ -112,6 +138,7 @@ function M.buildHaulerBody(budget)
         return nil
     end
 
+    ---@type BodyPartType[]
     local body = {}
     local cost = 0
     while cost + 100 <= budget and #body + 2 <= 16 do
@@ -125,11 +152,14 @@ function M.buildHaulerBody(budget)
     return body
 end
 
--- Build a balanced WORK/CARRY/MOVE body for builders and upgraders.
-function M.buildWorkerBody(budget)
+---Build a balanced WORK/CARRY/MOVE body for builders and upgraders.
+---@param budget integer
+---@return BodyPartType[]|nil
+function EconomyAgent.buildWorkerBody(budget)
     if budget < 200 then
         return nil
     end
+    ---@type BodyPartType[]
     local body = { screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE }
     local cost = 200
     while cost + 200 <= budget and #body + 3 <= 15 do
@@ -145,14 +175,16 @@ function M.buildWorkerBody(budget)
     return body
 end
 
--- Count haulers currently alive in the creep's room.
-local function countRoomHaulers(room)
-    local c = getRoomCache(room)
+---Count haulers currently alive in a room.
+---@param room Room
+---@return integer
+function EconomyAgent.countRoomHaulers(room)
+    local c = EconomyAgent.getRoomCache(room)
     if c.haulerCount ~= nil then
         return c.haulerCount
     end
     local count = 0
-    local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
+    local myCreeps = EconomyAgent.cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS) ---@type Creep[]
     for _, cr in ipairs(myCreeps) do
         if cr.memory and cr.memory.role == "hauler" then
             count = count + 1
@@ -162,26 +194,57 @@ local function countRoomHaulers(room)
     return count
 end
 
--- Assign a harvester to the source with fewest harvesters currently assigned.
-local function getAssignedSource(creep)
-    local room = creep.room
-    if creep.memory.sourceId and screeps.Game.getObjectById then
-        local existing = screeps.Game.getObjectById(creep.memory.sourceId)
+---Find a container adjacent to a position.
+---@param room Room
+---@param pos RoomPosition|nil
+---@return Structure|nil
+function EconomyAgent.findAdjacentContainer(room, pos)
+    if not pos then
+        return nil
+    end
+    local structs = EconomyAgent.cachedFind(room, "structures", screeps.FIND.STRUCTURES) ---@type Structure[]
+    for _, s in ipairs(structs) do
+        if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos and pos:getRangeTo(s) <= 2 then
+            return s
+        end
+    end
+    return nil
+end
+
+---Construct an EconomyAgent bound to a Creep.
+---@param creep Creep
+---@return EconomyAgent
+function EconomyAgent.new(creep)
+    return setmetatable({
+        creep = creep,
+        room = creep.room,
+        memory = creep.memory,
+    }, EconomyAgent)
+end
+
+---Assign this harvester to the source with fewest harvesters currently assigned.
+---@return Source|nil
+function EconomyAgent:getAssignedSource()
+    local creep = self.creep
+    local room = self.room
+    if self.memory.sourceId and screeps.Game.getObjectById then
+        local existing = screeps.Game.getObjectById(self.memory.sourceId) ---@type Source|nil
         if existing and existing.room and existing.room.name == room.name then
             return existing
         end
     end
 
-    local sources = room:find(screeps.FIND.SOURCES) or {}
+    local sources = room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
     if #sources == 0 then
         return nil
     end
 
+    ---@type table<string, integer>
     local assigned = {}
     for _, s in ipairs(sources) do
         assigned[s.id] = 0
     end
-    local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {}
+    local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, other in ipairs(myCreeps) do
         if other.id ~= creep.id and other.memory and other.memory.role == "harvester" and other.memory.sourceId then
             if assigned[other.memory.sourceId] ~= nil then
@@ -201,46 +264,38 @@ local function getAssignedSource(creep)
         end
     end
 
-    creep.memory.sourceId = best.id
+    self.memory.sourceId = best.id
     return best
 end
 
--- Find a container adjacent to a source.
-local function findAdjacentContainer(room, pos)
-    if not pos then
-        return nil
-    end
-    local structs = cachedFind(room, "structures", screeps.FIND.STRUCTURES)
-    for _, s in ipairs(structs) do
-        if s.structureType == screeps.STRUCTURE.CONTAINER and s.pos and pos:getRangeTo(s) <= 2 then
-            return s
-        end
-    end
-    return nil
-end
+---Find spawn/extension/tower/storage needing energy delivery.
+---@param includeTowers boolean
+---@param includeStorage boolean
+---@return Structure|nil
+function EconomyAgent:findRefillTarget(includeTowers, includeStorage)
+    local creep = self.creep
+    local myStructs = EconomyAgent.cachedFind(self.room, "myStructures", screeps.FIND.MY_STRUCTURES) ---@type Structure[]
 
--- Find spawn/extension/tower needing energy delivery.
-local function findRefillTarget(creep, includeTowers, includeStorage)
-    local room = creep.room
-    local myStructs = cachedFind(room, "myStructures", screeps.FIND.MY_STRUCTURES)
-
+    ---@type Structure[]
     local primary = {}
+    ---@type Structure[]
     local towers = {}
+    ---@type Structure|nil
     local storage = nil
 
     for _, s in ipairs(myStructs) do
         if s.structureType == screeps.STRUCTURE.SPAWN or s.structureType == screeps.STRUCTURE.EXTENSION then
-            if getFreeEnergy(s.store) > 0 then
+            if EconomyAgent.getFreeEnergy(s.store) > 0 then
                 table.insert(primary, s)
             end
         elseif includeTowers and s.structureType == screeps.STRUCTURE.TOWER then
-            local used = getUsedEnergy(s.store)
-            local free = getFreeEnergy(s.store)
+            local used = EconomyAgent.getUsedEnergy(s.store)
+            local free = EconomyAgent.getFreeEnergy(s.store)
             if free > 0 and used < 750 then
                 table.insert(towers, s)
             end
         elseif includeStorage and s.structureType == screeps.STRUCTURE.STORAGE then
-            if getFreeEnergy(s.store) > 0 then
+            if EconomyAgent.getFreeEnergy(s.store) > 0 then
                 storage = s
             end
         end
@@ -255,12 +310,17 @@ local function findRefillTarget(creep, includeTowers, includeStorage)
     return storage
 end
 
--- Gather energy for haulers, builders, and upgraders.
-local function acquireEnergy(creep, allowHarvest, allowStorage)
-    local room = creep.room
+---Gather energy for haulers, builders, and upgraders.
+---@param allowHarvest boolean
+---@param allowStorage boolean
+---@return boolean
+function EconomyAgent:acquireEnergy(allowHarvest, allowStorage)
+    local creep = self.creep
+    local room = self.room
 
     -- 1. Dropped energy resources (highest efficiency: zero decay waste).
-    local dropped = cachedFind(room, "dropped", screeps.FIND.DROPPED_RESOURCES)
+    local dropped = EconomyAgent.cachedFind(room, "dropped", screeps.FIND.DROPPED_RESOURCES) ---@type Resource[]
+    ---@type Resource[]
     local goodDrops = {}
     for _, r in ipairs(dropped) do
         if r.resourceType == screeps.RESOURCE.ENERGY and (r.amount or 0) >= 25 then
@@ -277,10 +337,11 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
 
     -- 2. Tombstones with energy.
     if screeps.FIND.TOMBSTONES then
-        local tombs = cachedFind(room, "tombs", screeps.FIND.TOMBSTONES)
+        local tombs = EconomyAgent.cachedFind(room, "tombs", screeps.FIND.TOMBSTONES) ---@type Tombstone[]
+        ---@type Tombstone[]
         local goodTombs = {}
         for _, t in ipairs(tombs) do
-            if getUsedEnergy(t.store) >= 20 then
+            if EconomyAgent.getUsedEnergy(t.store) >= 20 then
                 table.insert(goodTombs, t)
             end
         end
@@ -294,13 +355,15 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
     end
 
     -- 3. Source containers with energy.
-    local structs = cachedFind(room, "structures", screeps.FIND.STRUCTURES)
+    local structs = EconomyAgent.cachedFind(room, "structures", screeps.FIND.STRUCTURES) ---@type Structure[]
+    ---@type Structure[]
     local containers = {}
+    ---@type Structure|nil
     local storage = nil
     for _, s in ipairs(structs) do
-        if s.structureType == screeps.STRUCTURE.CONTAINER and getUsedEnergy(s.store) >= 50 then
+        if s.structureType == screeps.STRUCTURE.CONTAINER and EconomyAgent.getUsedEnergy(s.store) >= 50 then
             table.insert(containers, s)
-        elseif allowStorage and s.structureType == screeps.STRUCTURE.STORAGE and getUsedEnergy(s.store) >= 100 then
+        elseif allowStorage and s.structureType == screeps.STRUCTURE.STORAGE and EconomyAgent.getUsedEnergy(s.store) >= 100 then
             storage = s
         end
     end
@@ -322,7 +385,7 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
 
     -- 5. Direct harvest fallback for workers when containers aren't built yet.
     if allowHarvest then
-        local sources = room:find(screeps.FIND.SOURCES_ACTIVE) or room:find(screeps.FIND.SOURCES) or {}
+        local sources = room:find(screeps.FIND.SOURCES_ACTIVE) or room:find(screeps.FIND.SOURCES) or {} ---@type Source[]
         if #sources > 0 then
             local src = creep.pos:findClosestByRange(sources) or sources[1]
             if creep:harvest(src) == screeps.ERR.NOT_IN_RANGE then
@@ -335,18 +398,19 @@ local function acquireEnergy(creep, allowHarvest, allowStorage)
     return false
 end
 
--- Role: Harvester (dedicated source miner; self-delivers when no haulers exist).
-local function runHarvester(creep)
-    local room = creep.room
-    local source = getAssignedSource(creep)
+---Role: Harvester (dedicated source miner; self-delivers when no haulers exist).
+function EconomyAgent:runHarvester()
+    local creep = self.creep
+    local room = self.room
+    local source = self:getAssignedSource()
     if not source then
         return
     end
 
-    local haulers = countRoomHaulers(room)
-    local container = findAdjacentContainer(room, source.pos)
-    local used = getUsedEnergy(creep.store)
-    local free = getFreeEnergy(creep.store)
+    local haulers = EconomyAgent.countRoomHaulers(room)
+    local container = EconomyAgent.findAdjacentContainer(room, source.pos)
+    local used = EconomyAgent.getUsedEnergy(creep.store)
+    local free = EconomyAgent.getFreeEnergy(creep.store)
 
     -- If haulers exist, act as a dedicated static/drop miner!
     if haulers > 0 then
@@ -361,7 +425,7 @@ local function runHarvester(creep)
             if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(source)
             end
-        elseif container and getFreeEnergy(container.store) > 0 then
+        elseif container and EconomyAgent.getFreeEnergy(container.store) > 0 then
             if creep:transfer(container, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(container)
             end
@@ -372,18 +436,18 @@ local function runHarvester(creep)
     end
 
     -- Bootstrap mode (no haulers yet): harvest and deliver directly to spawn/extensions.
-    if creep.memory.delivering and used == 0 then
-        creep.memory.delivering = false
-    elseif not creep.memory.delivering and free == 0 then
-        creep.memory.delivering = true
+    if self.memory.delivering and used == 0 then
+        self.memory.delivering = false
+    elseif not self.memory.delivering and free == 0 then
+        self.memory.delivering = true
     end
 
-    if not creep.memory.delivering then
+    if not self.memory.delivering then
         if creep:harvest(source) == screeps.ERR.NOT_IN_RANGE then
             creep:moveTo(source)
         end
     else
-        local target = findRefillTarget(creep, true, false)
+        local target = self:findRefillTarget(true, false)
         if target then
             if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
@@ -396,20 +460,21 @@ local function runHarvester(creep)
     end
 end
 
--- Role: Hauler (fast energy pipeline from sources/drops -> spawn/extensions/towers/storage).
-local function runHauler(creep)
-    local room = creep.room
-    local used = getUsedEnergy(creep.store)
-    local free = getFreeEnergy(creep.store)
+---Role: Hauler (fast energy pipeline from sources/drops -> spawn/extensions/towers/storage).
+function EconomyAgent:runHauler()
+    local creep = self.creep
+    local room = self.room
+    local used = EconomyAgent.getUsedEnergy(creep.store)
+    local free = EconomyAgent.getFreeEnergy(creep.store)
 
-    if creep.memory.delivering and used == 0 then
-        creep.memory.delivering = false
-    elseif not creep.memory.delivering and (free == 0 or (used >= 50 and findRefillTarget(creep, false, false) ~= nil)) then
-        creep.memory.delivering = true
+    if self.memory.delivering and used == 0 then
+        self.memory.delivering = false
+    elseif not self.memory.delivering and (free == 0 or (used >= 50 and self:findRefillTarget(false, false) ~= nil)) then
+        self.memory.delivering = true
     end
 
-    if creep.memory.delivering then
-        local target = findRefillTarget(creep, true, true)
+    if self.memory.delivering then
+        local target = self:findRefillTarget(true, true)
         if target then
             if creep:transfer(target, screeps.RESOURCE.ENERGY) == screeps.ERR.NOT_IN_RANGE then
                 creep:moveTo(target)
@@ -417,10 +482,11 @@ local function runHauler(creep)
             return
         end
         -- If everything is full, feed an upgrader creep near the controller.
-        local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
+        local myCreeps = EconomyAgent.cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS) ---@type Creep[]
+        ---@type Creep[]
         local upgraders = {}
         for _, c in ipairs(myCreeps) do
-            if c.memory and c.memory.role == "upgrader" and getFreeEnergy(c.store) >= 25 then
+            if c.memory and c.memory.role == "upgrader" and EconomyAgent.getFreeEnergy(c.store) >= 25 then
                 table.insert(upgraders, c)
             end
         end
@@ -432,11 +498,11 @@ local function runHauler(creep)
         end
     else
         -- Only withdraw from storage if spawn/extensions/towers need refilling.
-        local needRefill = findRefillTarget(creep, true, false) ~= nil
-        local got = acquireEnergy(creep, false, needRefill)
+        local needRefill = self:findRefillTarget(true, false) ~= nil
+        local got = self:acquireEnergy(false, needRefill)
         if not got then
             -- Park near a harvester to catch dropped energy.
-            local myCreeps = cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS)
+            local myCreeps = EconomyAgent.cachedFind(room, "myCreeps", screeps.FIND.MY_CREEPS) ---@type Creep[]
             for _, c in ipairs(myCreeps) do
                 if c.memory and c.memory.role == "harvester" and c.pos then
                     if creep.pos:getRangeTo(c) > 2 then
@@ -449,27 +515,29 @@ local function runHauler(creep)
     end
 end
 
--- Role: Builder (fast construction + critical repair + upgrade fallback).
-local function runBuilder(creep)
-    local room = creep.room
-    local used = getUsedEnergy(creep.store)
-    local free = getFreeEnergy(creep.store)
+---Role: Builder (fast construction + critical repair + upgrade fallback).
+function EconomyAgent:runBuilder()
+    local creep = self.creep
+    local room = self.room
+    local used = EconomyAgent.getUsedEnergy(creep.store)
+    local free = EconomyAgent.getFreeEnergy(creep.store)
 
-    if creep.memory.working and used == 0 then
-        creep.memory.working = false
-    elseif not creep.memory.working and free == 0 then
-        creep.memory.working = true
+    if self.memory.working and used == 0 then
+        self.memory.working = false
+    elseif not self.memory.working and free == 0 then
+        self.memory.working = true
     end
 
-    if not creep.memory.working then
-        acquireEnergy(creep, true, true)
+    if not self.memory.working then
+        self:acquireEnergy(true, true)
         return
     end
 
     -- 1. Urgent repairs (critical ramparts, damaged towers/spawns/containers).
-    local structs = room:find(screeps.FIND.STRUCTURES) or {}
+    local structs = room:find(screeps.FIND.STRUCTURES) or {} ---@type Structure[]
+    ---@type Structure|nil
     local urgent = nil
-    local urgentScore = 9999999
+    local urgentScore = math.maxinteger
     for _, s in ipairs(structs) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
             if s.structureType == screeps.STRUCTURE.RAMPART and s.hits < 5000 then
@@ -493,7 +561,7 @@ local function runBuilder(creep)
     end
 
     -- 2. Prioritized construction sites (Tower > Extension > Container > Storage > Rampart > Road).
-    local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or room:find(screeps.FIND.CONSTRUCTION_SITES) or {}
+    local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or room:find(screeps.FIND.CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
     if #sites > 0 then
         local bestSite = sites[1]
         local bestPrio = SITE_PRIORITY[bestSite.structureType] or 99
@@ -515,6 +583,7 @@ local function runBuilder(creep)
     end
 
     -- 3. General maintenance repairs.
+    ---@type Structure[]
     local repairable = {}
     for _, s in ipairs(structs) do
         if s.hits and s.hitsMax and s.hitsMax > 0 then
@@ -543,20 +612,21 @@ local function runBuilder(creep)
     end
 end
 
--- Role: Upgrader (fast RCL progression).
-local function runUpgrader(creep)
-    local room = creep.room
-    local used = getUsedEnergy(creep.store)
-    local free = getFreeEnergy(creep.store)
+---Role: Upgrader (fast RCL progression).
+function EconomyAgent:runUpgrader()
+    local creep = self.creep
+    local room = self.room
+    local used = EconomyAgent.getUsedEnergy(creep.store)
+    local free = EconomyAgent.getFreeEnergy(creep.store)
 
-    if creep.memory.working and used == 0 then
-        creep.memory.working = false
-    elseif not creep.memory.working and free == 0 then
-        creep.memory.working = true
+    if self.memory.working and used == 0 then
+        self.memory.working = false
+    elseif not self.memory.working and free == 0 then
+        self.memory.working = true
     end
 
-    if not creep.memory.working then
-        acquireEnergy(creep, true, true)
+    if not self.memory.working then
+        self:acquireEnergy(true, true)
     else
         local ctrl = room.controller
         if ctrl and ctrl.my then
@@ -567,20 +637,27 @@ local function runUpgrader(creep)
     end
 end
 
-function M.run(creep)
-    if not creep or creep.spawning or not creep.memory then
-        return
-    end
-    local role = creep.memory.role
+---Dispatch this economy creep to its assigned role behavior.
+function EconomyAgent:execute()
+    local role = self.memory.role
     if role == "harvester" then
-        runHarvester(creep)
+        self:runHarvester()
     elseif role == "hauler" then
-        runHauler(creep)
+        self:runHauler()
     elseif role == "builder" then
-        runBuilder(creep)
+        self:runBuilder()
     elseif role == "upgrader" then
-        runUpgrader(creep)
+        self:runUpgrader()
     end
 end
 
-return M
+---Static convenience entry point to run an economy creep for one tick.
+---@param creep Creep|nil
+function EconomyAgent.run(creep)
+    if not creep or creep.spawning or not creep.memory then
+        return
+    end
+    EconomyAgent.new(creep):execute()
+end
+
+return EconomyAgent

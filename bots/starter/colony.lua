@@ -4,7 +4,7 @@
 
 local screeps <const> = require("screeps")
 
-local planner <const> = require("planner")
+local RoomPlanner <const> = require("planner")
 local DefenseManager <const> = require("defense")
 
 local PLANNER_INTERVAL <const> = 25
@@ -52,7 +52,7 @@ Colony.__index = Colony
 
 ---@param store? Store
 ---@return integer
-local function getUsedEnergy(store)
+function Colony.getUsedEnergy(store)
     if not store then
         return 0
     end
@@ -61,7 +61,7 @@ end
 
 ---@param store? Store
 ---@return integer
-local function getFreeEnergy(store)
+function Colony.getFreeEnergy(store)
     if not store then
         return 0
     end
@@ -70,7 +70,7 @@ end
 
 ---@param body BodyPartType[]
 ---@return integer
-local function bodyCost(body)
+function Colony.bodyCost(body)
     local total = 0
     for _, part in ipairs(body) do
         total = total + (screeps.COST[part] or 0)
@@ -80,7 +80,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildWorkerBody(budget)
+function Colony.buildWorkerBody(budget)
     if budget < 200 then
         return nil
     end
@@ -102,7 +102,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildMinerBody(budget)
+function Colony.buildMinerBody(budget)
     if budget < 300 then
         return nil
     end
@@ -130,7 +130,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildHaulerBody(budget)
+function Colony.buildHaulerBody(budget)
     if budget < 150 then
         return nil
     end
@@ -152,7 +152,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildScoutBody(budget)
+function Colony.buildScoutBody(budget)
     if budget < 50 then
         return nil
     end
@@ -161,7 +161,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildRemoteHarvesterBody(budget)
+function Colony.buildRemoteHarvesterBody(budget)
     if budget < 400 then
         return nil
     end
@@ -173,7 +173,7 @@ end
 
 ---@param budget integer
 ---@return BodyPartType[]|nil
-local function buildRemoteHaulerBody(budget)
+function Colony.buildRemoteHaulerBody(budget)
     if budget < 200 then
         return nil
     end
@@ -191,7 +191,7 @@ end
 
 ---@param role string
 ---@return integer
-local function minRoleCost(role)
+function Colony.minRoleCost(role)
     if role == "miner" then
         return 300
     elseif role == "hauler" then
@@ -214,7 +214,7 @@ end
 
 ---@param roomName string
 ---@return string[]
-local function getAdjacentRoomNames(roomName)
+function Colony.getAdjacentRoomNames(roomName)
     ---@type string[]
     local result = {}
     if not roomName or not screeps.Game.map or not screeps.Game.map.describeExits then
@@ -315,7 +315,7 @@ end
 
 ---@return string|nil
 function Colony:findRoomNeedingScout()
-    local adj = getAdjacentRoomNames(self.room.name)
+    local adj = Colony.getAdjacentRoomNames(self.room.name)
     if #adj == 0 then
         return nil
     end
@@ -339,7 +339,7 @@ end
 ---Select up to 1 adjacent unowned, safe room with sources for remote mining.
 ---@return string|nil
 function Colony:updateRemoteRoom()
-    local adj = getAdjacentRoomNames(self.room.name)
+    local adj = Colony.getAdjacentRoomNames(self.room.name)
     if #adj == 0 then
         self.memory.remoteRoom = nil
         return nil
@@ -364,7 +364,7 @@ end
 ---@return string|nil
 function Colony:updateAttackTarget()
     local myOwner = (self.room.controller and self.room.controller.owner and self.room.controller.owner.username) or nil
-    local adj = getAdjacentRoomNames(self.room.name)
+    local adj = Colony.getAdjacentRoomNames(self.room.name)
     local intelMap = (screeps.Memory and screeps.Memory.roomIntel) or {}
     local enemyRoom = nil
     for _, rName in ipairs(adj) do
@@ -501,7 +501,7 @@ function Colony:manageSpawning()
     local targets, scoutTarget = self:computeTargetRoster(energyCap)
     rmem.desiredRoles = targets
 
-    local spawn = planner.getPrimarySpawn(room)
+    local spawn = RoomPlanner.getPrimarySpawn(room)
     if not spawn then
         rmem.nextSpawn = "no spawn"
         return
@@ -565,9 +565,9 @@ function Colony:manageSpawning()
     ---@type BodyPartType[]|nil
     local body
     if roleToSpawn == "miner" then
-        body = buildMinerBody(budget)
+        body = Colony.buildMinerBody(budget)
     elseif roleToSpawn == "hauler" then
-        body = buildHaulerBody(budget)
+        body = Colony.buildHaulerBody(budget)
     elseif roleToSpawn == "defender" then
         body = DefenseManager.buildDefenderBody(budget)
     elseif roleToSpawn == "assault" then
@@ -575,21 +575,21 @@ function Colony:manageSpawning()
     elseif roleToSpawn == "healer" then
         body = DefenseManager.buildHealerBody(budget)
     elseif roleToSpawn == "scout" then
-        body = buildScoutBody(budget)
+        body = Colony.buildScoutBody(budget)
     elseif roleToSpawn == "remoteHarvester" then
-        body = buildRemoteHarvesterBody(budget)
+        body = Colony.buildRemoteHarvesterBody(budget)
     elseif roleToSpawn == "remoteHauler" then
-        body = buildRemoteHaulerBody(budget)
+        body = Colony.buildRemoteHaulerBody(budget)
     else
-        body = buildWorkerBody(budget)
+        body = Colony.buildWorkerBody(budget)
     end
 
     if not body then
-        rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, minRoleCost(roleToSpawn))
+        rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, Colony.minRoleCost(roleToSpawn))
         return
     end
 
-    local cost = bodyCost(body)
+    local cost = Colony.bodyCost(body)
     if energyAvail < cost then
         rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, cost)
         return
@@ -674,7 +674,7 @@ function Colony:runLinks()
         if (sender.cooldown or 0) > 0 then
             return false
         end
-        if getUsedEnergy(sender.store) < 400 or getFreeEnergy(receiver.store) < 200 then
+        if Colony.getUsedEnergy(sender.store) < 400 or Colony.getFreeEnergy(receiver.store) < 200 then
             return false
         end
         if sender:transferEnergy(receiver) == screeps.OK then
@@ -737,9 +737,9 @@ function Colony:drawVisuals()
         return
     end
 
-    planner.drawPlanVisuals(room)
+    RoomPlanner.drawPlanVisuals(room)
 
-    local spawn = planner.getPrimarySpawn(room)
+    local spawn = RoomPlanner.getPrimarySpawn(room)
     if spawn and spawn.pos then
         local spawnColor = "#66bb6a"
         if self.defense.threatLevel > 0 then
@@ -845,7 +845,7 @@ function Colony:run()
     self:manageSpawning()
 
     if (not self.memory.plan) or (screeps.Game.time and (screeps.Game.time % PLANNER_INTERVAL == 0)) then
-        planner.planRoom(self.room, self.rcl)
+        RoomPlanner.planRoom(self.room, self.rcl)
     end
 
     self:drawVisuals()

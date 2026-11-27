@@ -28,7 +28,7 @@ local PART_STRENGTH <const> = {
 
 ---@param store? Store
 ---@return integer
-local function getUsedEnergy(store)
+function DefenseManager.getUsedEnergy(store)
     if not store then
         return 0
     end
@@ -37,7 +37,7 @@ end
 
 ---@param roomName string
 ---@return table<string, any>|nil
-local function ensureRoomMemory(roomName)
+function DefenseManager.ensureRoomMemory(roomName)
     if not screeps.Memory then
         return nil
     end
@@ -53,7 +53,7 @@ end
 ---Compute Hivemind-style part-weighted combat strength for a hostile creep.
 ---@param creep Creep
 ---@return integer
-local function scoreHostileCreep(creep)
+function DefenseManager.scoreHostileCreep(creep)
     if not creep or not creep.body then
         return 0
     end
@@ -81,7 +81,7 @@ end
 ---@param hostiles Creep[]
 ---@param anchorPos? RoomPosition
 ---@return Creep|nil
-local function selectFocusHostile(hostiles, anchorPos)
+function DefenseManager.selectFocusHostile(hostiles, anchorPos)
     local best = nil
     local bestScore = math.maxinteger
 
@@ -102,10 +102,9 @@ local function selectFocusHostile(hostiles, anchorPos)
 end
 
 ---Select the most critical structure for tower repair.
----@param room Room
 ---@return Structure|nil
-local function selectTowerRepairTarget(room)
-    local structures = room:find(screeps.FIND.STRUCTURES) ---@type Structure[]
+function DefenseManager:selectTowerRepairTarget()
+    local structures = self.room:find(screeps.FIND.STRUCTURES) ---@type Structure[]
     if not structures or #structures == 0 then
         return nil
     end
@@ -168,7 +167,7 @@ function DefenseManager:assessThreat()
 
     if count > 0 then
         for _, c in ipairs(hostiles) do
-            enemyStrength = enemyStrength + scoreHostileCreep(c)
+            enemyStrength = enemyStrength + DefenseManager.scoreHostileCreep(c)
         end
         if enemyStrength > 200 then
             level = 3
@@ -183,7 +182,7 @@ function DefenseManager:assessThreat()
     self.enemyStrength = enemyStrength
     self.hostiles = hostiles
 
-    local rmem = room.name and ensureRoomMemory(room.name)
+    local rmem = room.name and DefenseManager.ensureRoomMemory(room.name)
     if rmem then
         local prevLastSeen = (rmem.threat and rmem.threat.lastSeen) or 0
         rmem.threat = {
@@ -235,7 +234,7 @@ function DefenseManager:runTowers()
     if #self.hostiles > 0 then
         local spawns = room:find(screeps.FIND.MY_SPAWNS) ---@type StructureSpawn[]
         local anchor = (spawns and spawns[1] and spawns[1].pos) or towers[1].pos
-        local primaryTarget = selectFocusHostile(self.hostiles, anchor)
+        local primaryTarget = DefenseManager.selectFocusHostile(self.hostiles, anchor)
 
         if primaryTarget then
             for _, tower in ipairs(towers) do
@@ -281,10 +280,10 @@ function DefenseManager:runTowers()
     end
 
     -- 3. Repair critical structures while keeping an energy reserve for defense.
-    local repairTarget = selectTowerRepairTarget(room)
+    local repairTarget = self:selectTowerRepairTarget()
     if repairTarget then
         for _, tower in ipairs(towers) do
-            if getUsedEnergy(tower.store) > 300 then
+            if DefenseManager.getUsedEnergy(tower.store) > 300 then
                 tower:repair(repairTarget)
                 if room.visual and repairTarget.pos then
                     room.visual:line(tower.pos.x, tower.pos.y, repairTarget.pos.x, repairTarget.pos.y, {

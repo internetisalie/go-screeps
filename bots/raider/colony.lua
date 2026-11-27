@@ -4,9 +4,9 @@
 
 local screeps <const> = require("screeps")
 
-local economy <const> = require("economy")
-local planner <const> = require("planner")
-local combat <const> = require("combat")
+local EconomyAgent <const> = require("economy")
+local RaiderPlanner <const> = require("planner")
+local CombatAgent <const> = require("combat")
 
 local PLANNER_INTERVAL <const> = 20
 
@@ -33,8 +33,9 @@ local PLANNER_INTERVAL <const> = 20
 local RaiderColony = {}
 RaiderColony.__index = RaiderColony
 
+---Create a zero-initialized RaiderRoleCounts table.
 ---@return RaiderRoleCounts
-local function makeRoleCounter()
+function RaiderColony.makeRoleCounter()
     return {
         harvester = 0,
         hauler = 0,
@@ -49,9 +50,10 @@ local function makeRoleCounter()
     }
 end
 
+---Compute total energy cost of a creep body array.
 ---@param body BodyPartType[]
 ---@return integer
-local function bodyCost(body)
+function RaiderColony.bodyCost(body)
     local total = 0
     for _, part in ipairs(body) do
         total = total + (screeps.COST[part] or 0)
@@ -59,9 +61,10 @@ local function bodyCost(body)
     return total
 end
 
+---Return minimum energy threshold required to spawn a given role.
 ---@param role string
 ---@return integer
-local function minRoleCost(role)
+function RaiderColony.minRoleCost(role)
     if role == "scout" then
         return 50
     elseif role == "hauler" then
@@ -81,7 +84,7 @@ end
 ---Count all owned creeps globally by role.
 ---@return RaiderRoleCounts
 function RaiderColony.countGlobalRoles()
-    local counts = makeRoleCounter()
+    local counts = RaiderColony.makeRoleCounter()
     if not screeps.Game.creeps then
         return counts
     end
@@ -110,7 +113,7 @@ function RaiderColony.new(room, globalCounts)
         room = room,
         rcl = (room.controller and room.controller.level) or 0,
         memory = screeps.Memory.rooms[room.name],
-        roomCounts = makeRoleCounter(),
+        roomCounts = RaiderColony.makeRoleCounter(),
         globalCounts = globalCounts,
         threatLevel = 0,
         hostiles = {},
@@ -119,7 +122,7 @@ end
 
 ---@return RaiderRoleCounts
 function RaiderColony:countRoomRoles()
-    local counts = makeRoleCounter()
+    local counts = RaiderColony.makeRoleCounter()
     local myCreeps = self.room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, creep in ipairs(myCreeps) do
         counts.total = counts.total + 1
@@ -137,7 +140,7 @@ function RaiderColony:needsScout()
     if self.globalCounts.scout > 0 then
         return false
     end
-    local adj = combat.getAdjacentRooms(self.room)
+    local adj = CombatAgent.getAdjacentRooms(self.room)
     if #adj == 0 then
         return false
     end
@@ -197,7 +200,7 @@ function RaiderColony:manageSpawning()
         medic = wantMedics,
     }
 
-    local spawn = planner.getPrimarySpawn(room)
+    local spawn = RaiderPlanner.getPrimarySpawn(room)
     if not spawn then
         rmem.nextSpawn = "no spawn"
         return
@@ -254,29 +257,29 @@ function RaiderColony:manageSpawning()
     ---@type BodyPartType[]|nil
     local body = nil
     if roleToSpawn == "harvester" then
-        body = economy.buildHarvesterBody(budget, roomCounts.hauler > 0)
+        body = EconomyAgent.buildHarvesterBody(budget, roomCounts.hauler > 0)
     elseif roleToSpawn == "hauler" then
-        body = economy.buildHaulerBody(budget)
+        body = EconomyAgent.buildHaulerBody(budget)
     elseif roleToSpawn == "upgrader" or roleToSpawn == "builder" then
-        body = economy.buildWorkerBody(budget)
+        body = EconomyAgent.buildWorkerBody(budget)
     elseif roleToSpawn == "defender" then
-        body = combat.buildDefenderBody(budget)
+        body = CombatAgent.buildDefenderBody(budget)
     elseif roleToSpawn == "scout" then
         body = { screeps.PART.MOVE }
     elseif roleToSpawn == "brawler" then
-        body = combat.buildBrawlerBody(budget)
+        body = CombatAgent.buildBrawlerBody(budget)
     elseif roleToSpawn == "skirmisher" then
-        body = combat.buildSkirmisherBody(budget)
+        body = CombatAgent.buildSkirmisherBody(budget)
     elseif roleToSpawn == "medic" then
-        body = combat.buildMedicBody(budget)
+        body = CombatAgent.buildMedicBody(budget)
     end
 
     if not body then
-        rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, minRoleCost(roleToSpawn))
+        rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, RaiderColony.minRoleCost(roleToSpawn))
         return
     end
 
-    local cost = bodyCost(body)
+    local cost = RaiderColony.bodyCost(body)
     if energyAvail < cost then
         rmem.nextSpawn = string.format("saving for %s (%d/%d)", roleToSpawn, energyAvail, cost)
         return
@@ -304,9 +307,9 @@ function RaiderColony:drawVisuals()
         return
     end
 
-    planner.drawPlanVisuals(room)
+    RaiderPlanner.drawPlanVisuals(room)
 
-    local spawn = planner.getPrimarySpawn(room)
+    local spawn = RaiderPlanner.getPrimarySpawn(room)
     if spawn and spawn.pos then
         local ringColor = (self.threatLevel > 0) and "#ff1744" or (spawn.spawning and "#ffab40" or "#ff5252")
         vis:circle(spawn.pos.x, spawn.pos.y, {
@@ -347,7 +350,7 @@ function RaiderColony:drawVisuals()
         })
     end
 
-    local roleColors = {
+    local roleColors <const> = {
         { count = self.roomCounts.harvester, color = "#ffeb3b" },
         { count = self.roomCounts.hauler, color = "#ffab40" },
         { count = self.roomCounts.upgrader, color = "#ce93d8" },
@@ -374,12 +377,12 @@ end
 ---Run one full tick for this owned Raider colony.
 function RaiderColony:run()
     self:countRoomRoles()
-    self.threatLevel, self.hostiles = combat.assessThreat(self.room)
-    combat.runTowers(self.room, self.hostiles)
+    self.threatLevel, self.hostiles = CombatAgent.assessThreat(self.room)
+    CombatAgent.runTowers(self.room, self.hostiles)
     self:manageSpawning()
 
     if (not self.memory.plan) or (screeps.Game.time and (screeps.Game.time % PLANNER_INTERVAL == 0)) then
-        planner.planRoom(self.room, self.rcl)
+        RaiderPlanner.planRoom(self.room, self.rcl)
     end
 
     self:drawVisuals()

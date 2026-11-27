@@ -5,17 +5,33 @@
 local screeps <const> = require("screeps")
 
 local Colony <const> = require("colony")
-local roles <const> = require("roles")
+local CreepAgent <const> = require("roles")
 
----Remove stale Memory.creeps entries and initialize top-level Memory tables.
+---@class Hivemind
+---@field game Game
+---@field memory Memory
+local Hivemind = {}
+Hivemind.__index = Hivemind
+
+---Construct a Hivemind tick coordinator bound to Game and Memory.
 ---@param game Game
 ---@param memory Memory
-local function cleanupMemory(game, memory)
+---@return Hivemind
+function Hivemind.new(game, memory)
+    return setmetatable({
+        game = game,
+        memory = memory,
+    }, Hivemind)
+end
+
+---Remove stale Memory.creeps entries and initialize top-level Memory tables.
+function Hivemind:cleanupMemory()
+    local memory = self.memory
     if not memory.creeps then
         memory.creeps = {}
     else
         for name, _ in pairs(memory.creeps) do
-            if not game.creeps[name] then
+            if not self.game.creeps[name] then
                 memory.creeps[name] = nil
             end
         end
@@ -29,12 +45,11 @@ local function cleanupMemory(game, memory)
 end
 
 ---Adopt any owned creep missing creep.memory.role (e.g. migrated from another bot).
----@param game Game
-local function adoptUnassignedCreeps(game)
-    if not game.creeps then
+function Hivemind:adoptUnassignedCreeps()
+    if not self.game.creeps then
         return
     end
-    for _, creep in pairs(game.creeps) do
+    for _, creep in pairs(self.game.creeps) do
         if creep.memory and creep.memory.role == nil then
             local attack, ranged, heal, work, carry, move = 0, 0, 0, 0, 0, 0
             if creep.body then
@@ -80,16 +95,14 @@ local function adoptUnassignedCreeps(game)
     end
 end
 
----Main tick entry point invoked every tick by the Screeps Lua engine.
----@param game Game
----@param memory Memory
-local function loop(game, memory)
-    cleanupMemory(game, memory)
-    adoptUnassignedCreeps(game)
+---Execute one full tick across all owned colonies and creeps.
+function Hivemind:run()
+    self:cleanupMemory()
+    self:adoptUnassignedCreeps()
 
-    if game.rooms then
-        for _, room in pairs(game.rooms) do
-            roles.recordRoomIntel(room)
+    if self.game.rooms then
+        for _, room in pairs(self.game.rooms) do
+            CreepAgent.recordRoomIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
                 or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
@@ -98,13 +111,20 @@ local function loop(game, memory)
         end
     end
 
-    if game.creeps then
-        for _, creep in pairs(game.creeps) do
-            roles.run(creep)
+    if self.game.creeps then
+        for _, creep in pairs(self.game.creeps) do
+            CreepAgent.run(creep)
         end
     end
 end
 
+---Main tick entry point invoked every tick by the Screeps Lua engine.
+---@param game Game
+---@param memory Memory
+function Hivemind.loop(game, memory)
+    Hivemind.new(game, memory):run()
+end
+
 return {
-    loop = loop,
+    loop = Hivemind.loop,
 }
