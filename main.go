@@ -1649,17 +1649,20 @@ func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 			col.A = 0.25
 			fg.A = 0.4
 		}
+		letterStyle := th.Text.Caption.WithSize(9.5).WithWeight(700).WithColor(fg)
+		letterStyle.LineHeight = 1.0
 		cells = append(cells, basic.SizedBox{
 			Width:  16,
 			Height: 16,
 			Child: basic.Container{
-				Color:  col,
-				Radius: 3,
+				Color:   col,
+				Radius:  3,
+				Padding: layout.Insets{Bottom: 1},
 				Child: basic.Align{
 					Alignment: layout.AlignCenter,
 					Child: basic.Text{
 						Content: letter,
-						Style:   th.Text.Caption.WithSize(9.5).WithWeight(700).WithColor(fg),
+						Style:   letterStyle,
 					},
 				},
 			},
