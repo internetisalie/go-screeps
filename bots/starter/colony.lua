@@ -35,10 +35,13 @@ local PRESPAWN_TTL <const> = {
 ---@field builder integer
 ---@field defender integer
 ---@field assault integer
+---@field dismantler integer
 ---@field healer integer
 ---@field scout integer
 ---@field remoteHarvester integer
 ---@field remoteHauler integer
+---@field remoteBuilder integer
+---@field mineralHarvester integer
 ---@field total? integer
 
 ---@class Colony
@@ -200,6 +203,8 @@ function Colony.minRoleCost(role)
         return 190
     elseif role == "assault" then
         return 320
+    elseif role == "dismantler" then
+        return 300
     elseif role == "healer" then
         return 300
     elseif role == "scout" then
@@ -208,6 +213,10 @@ function Colony.minRoleCost(role)
         return 400
     elseif role == "remoteHauler" then
         return 200
+    elseif role == "remoteBuilder" then
+        return 300
+    elseif role == "mineralHarvester" then
+        return 400
     end
     return 200
 end
@@ -278,10 +287,13 @@ function Colony:countRoles()
         builder = 0,
         defender = 0,
         assault = 0,
+        dismantler = 0,
         healer = 0,
         scout = 0,
         remoteHarvester = 0,
         remoteHauler = 0,
+        remoteBuilder = 0,
+        mineralHarvester = 0,
         total = 0,
     }
     if screeps.Game.creeps then
@@ -324,6 +336,39 @@ function Colony:findRoomNeedingScout()
     local best = nil
     local oldestSeen = now + 1
     for _, rName in ipairs(adj) do
+        local info = intelMap[rName]
+        local seen = (info and info.lastSeen) or -9999
+        local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
+        if (not info) or (now - seen > ttl) then
+            if seen < oldestSeen then
+                oldestSeen = seen
+                best = rName
+            end
+        end
+    end
+    if best then
+        return best
+    end
+
+    -- Multi-hop (2-hop) intel refresh: check neighbors of known 1-hop rooms.
+    local hop2Seen = { [self.room.name] = true } ---@type table<string, boolean>
+    for _, rName in ipairs(adj) do
+        hop2Seen[rName] = true
+    end
+    local hop2 = {} ---@type string[]
+    for _, rName in ipairs(adj) do
+        local info = intelMap[rName]
+        if info and type(info.exits) == "table" then
+            for _, nextName in pairs(info.exits) do
+                if type(nextName) == "string" and nextName ~= "" and not hop2Seen[nextName] then
+                    hop2Seen[nextName] = true
+                    table.insert(hop2, nextName)
+                end
+            end
+        end
+    end
+    table.sort(hop2)
+    for _, rName in ipairs(hop2) do
         local info = intelMap[rName]
         local seen = (info and info.lastSeen) or -9999
         local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
@@ -430,10 +475,13 @@ function Colony:computeTargetRoster(energyCap)
         builder = 0,
         defender = self.defense:desiredDefenders(),
         assault = 0,
+        dismantler = 0,
         healer = 0,
         scout = 0,
         remoteHarvester = 0,
         remoteHauler = 0,
+        remoteBuilder = 0,
+        mineralHarvester = 0,
     }
 
     if useStaticMiners then
@@ -480,11 +528,34 @@ function Colony:computeTargetRoster(energyCap)
         local remoteSources = (rIntel and rIntel.sources) or 1
         targets.remoteHarvester = (energyCap >= 550 and remoteSources >= 2) and 2 or 1
         targets.remoteHauler = (targets.remoteHarvester >= 2) and 2 or 1
+        if rcl >= 3 and energyCap >= 550 then
+            targets.remoteBuilder = 1
+        end
+    end
+
+    -- Mineral harvesting at RCL 6+ when an Extractor and Storage are built and mineral is active.
+    if rcl >= 6 and energyCap >= 800 and self.defense.threatLevel == 0 then
+        local hasExtractor = false
+        local hasStorage = false
+        for _, s in ipairs(structures) do
+            if s.structureType == screeps.STRUCTURE.EXTRACTOR then
+                hasExtractor = true
+            elseif s.structureType == screeps.STRUCTURE.STORAGE then
+                hasStorage = true
+            end
+        end
+        if hasExtractor and hasStorage then
+            local minerals = room:find(screeps.FIND.MINERALS) or {} ---@type Mineral[]
+            if minerals[1] and (minerals[1].mineralAmount or 0) > 0 then
+                targets.mineralHarvester = 1
+            end
+        end
     end
 
     self:updateAttackTarget()
     if rcl >= 3 and energyCap >= 550 and self.defense.threatLevel == 0 and self.memory.attackTarget then
         targets.assault = 2
+        targets.dismantler = (energyCap >= 1000) and 2 or 1
         targets.healer = (energyCap >= 800) and 2 or 1
     end
 
@@ -550,8 +621,14 @@ function Colony:manageSpawning()
         roleToSpawn = "remoteHarvester"
     elseif counts.remoteHauler < targets.remoteHauler then
         roleToSpawn = "remoteHauler"
+    elseif counts.remoteBuilder < targets.remoteBuilder then
+        roleToSpawn = "remoteBuilder"
+    elseif counts.mineralHarvester < targets.mineralHarvester then
+        roleToSpawn = "mineralHarvester"
     elseif counts.healer < targets.healer then
         roleToSpawn = "healer"
+    elseif counts.dismantler < targets.dismantler then
+        roleToSpawn = "dismantler"
     elseif counts.assault < targets.assault then
         roleToSpawn = "assault"
     end
@@ -571,6 +648,8 @@ function Colony:manageSpawning()
         body = DefenseManager.buildDefenderBody(budget)
     elseif roleToSpawn == "assault" then
         body = DefenseManager.buildAssaultBody(budget)
+    elseif roleToSpawn == "dismantler" then
+        body = DefenseManager.buildDismantlerBody(budget)
     elseif roleToSpawn == "healer" then
         body = DefenseManager.buildHealerBody(budget)
     elseif roleToSpawn == "scout" then
@@ -579,6 +658,8 @@ function Colony:manageSpawning()
         body = Colony.buildRemoteHarvesterBody(budget)
     elseif roleToSpawn == "remoteHauler" then
         body = Colony.buildRemoteHaulerBody(budget)
+    elseif roleToSpawn == "mineralHarvester" then
+        body = Colony.buildWorkerBody(budget)
     else
         body = Colony.buildWorkerBody(budget)
     end
@@ -601,9 +682,9 @@ function Colony:manageSpawning()
     }
     if roleToSpawn == "scout" and scoutTarget then
         creepMem.targetRoom = scoutTarget
-    elseif (roleToSpawn == "remoteHarvester" or roleToSpawn == "remoteHauler") and rmem.remoteRoom then
+    elseif (roleToSpawn == "remoteHarvester" or roleToSpawn == "remoteHauler" or roleToSpawn == "remoteBuilder") and rmem.remoteRoom then
         creepMem.targetRoom = rmem.remoteRoom
-    elseif (roleToSpawn == "assault" or roleToSpawn == "healer") and rmem.attackTarget then
+    elseif (roleToSpawn == "assault" or roleToSpawn == "dismantler" or roleToSpawn == "healer") and rmem.attackTarget then
         creepMem.targetRoom = rmem.attackTarget
     end
 

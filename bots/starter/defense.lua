@@ -480,4 +480,51 @@ function DefenseManager.buildHealerBody(budget)
     return body
 end
 
+---Build a siege dismantler body (TOUGH + WORK + 1:1 MOVE, up to 24 parts) to breach enemy towers/spawns/ramparts.
+---@param budget integer
+---@return BodyPartType[]|nil
+function DefenseManager.buildDismantlerBody(budget)
+    if budget < 300 then
+        return nil
+    end
+    ---@type BodyPartType[]
+    local body = {}
+    local cost = 0
+    local toughCount = 0
+    local workCount = 0
+
+    -- Front-loaded TOUGH padding when budget supports a real siege unit.
+    if budget >= 500 then
+        local wantTough = math.min(4, budget // 350)
+        for _ = 1, wantTough do
+            if cost + 60 <= budget and (#body + toughCount + 2) <= 24 then
+                table.insert(body, screeps.PART.TOUGH)
+                cost = cost + 60 -- 10 TOUGH + 50 reserved MOVE
+                toughCount = toughCount + 1
+            end
+        end
+    end
+
+    while cost + 150 <= budget and (#body + toughCount + workCount + 2) <= 24 do
+        table.insert(body, screeps.PART.WORK)
+        cost = cost + 150 -- 100 WORK + 50 reserved MOVE
+        workCount = workCount + 1
+    end
+    if workCount == 0 then
+        return { screeps.PART.WORK, screeps.PART.WORK, screeps.PART.MOVE, screeps.PART.MOVE }
+    end
+
+    -- Reclaim reserved MOVE budget and append MOVE parts at the back.
+    local needMove = toughCount + workCount
+    cost = cost - (needMove * 50)
+    local moveCount = math.min(24 - #body, math.max(needMove, (budget - cost) // 50))
+    for _ = 1, moveCount do
+        if cost + 50 <= budget then
+            table.insert(body, screeps.PART.MOVE)
+            cost = cost + 50
+        end
+    end
+    return body
+end
+
 return DefenseManager

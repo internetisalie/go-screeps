@@ -1,12 +1,14 @@
 -- roles.lua: Object-oriented colony creep role behaviors for Screeps.
--- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler, assault, healer.
+-- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler, remoteBuilder, mineralHarvester, assault, dismantler, healer.
 
 local screeps <const> = require("screeps")
+local RoomPlanner <const> = require("planner")
 
 ---@class RoomIntelEntry
 ---@field owner? string
 ---@field sources integer
 ---@field hostiles integer
+---@field exits? table<string, string>
 ---@field lastSeen integer
 
 ---@class DeliveryOptions
@@ -142,10 +144,19 @@ function CreepAgent.recordRoomIntel(room)
         end
     end
 
+    local exits = nil
+    if screeps.Game.map and screeps.Game.map.describeExits then
+        local rawExits = screeps.Game.map.describeExits(room.name)
+        if type(rawExits) == "table" then
+            exits = rawExits
+        end
+    end
+
     screeps.Memory.roomIntel[room.name] = {
         sources = #sources,
         owner = owner,
         hostiles = #hostiles,
+        exits = exits,
         lastSeen = now,
     }
 end
@@ -300,7 +311,41 @@ function CreepAgent.pickNextScoutRoom(homeRoomName)
     local intelMap = (screeps.Memory and screeps.Memory.roomIntel) or {}
     local bestRoom = nil
     local oldestSeen = now + 1
+    -- Prioritize 1-hop neighbors first.
     for _, rName in ipairs(candidates) do
+        local info = intelMap[rName]
+        local seen = (info and info.lastSeen) or -9999
+        local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
+        if (not info) or (now - seen > ttl) then
+            if seen < oldestSeen then
+                oldestSeen = seen
+                bestRoom = rName
+            end
+        end
+    end
+    if bestRoom then
+        return bestRoom
+    end
+
+    -- Multi-hop (2-hop) scouting: check neighbors of known 1-hop rooms.
+    local hop2Seen = { [homeRoomName] = true } ---@type table<string, boolean>
+    for _, rName in ipairs(candidates) do
+        hop2Seen[rName] = true
+    end
+    local hop2Candidates = {} ---@type string[]
+    for _, rName in ipairs(candidates) do
+        local info = intelMap[rName]
+        if info and type(info.exits) == "table" then
+            for _, nextName in pairs(info.exits) do
+                if type(nextName) == "string" and nextName ~= "" and not hop2Seen[nextName] then
+                    hop2Seen[nextName] = true
+                    table.insert(hop2Candidates, nextName)
+                end
+            end
+        end
+    end
+    table.sort(hop2Candidates)
+    for _, rName in ipairs(hop2Candidates) do
         local info = intelMap[rName]
         local seen = (info and info.lastSeen) or -9999
         local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
@@ -326,7 +371,7 @@ function CreepAgent.inspectAssaultWave(room)
     for _, c in ipairs(myCreeps) do
         if not c.spawning and c.memory then
             local r = c.memory.role
-            if (r == "assault" or r == "healer") and c.memory.state ~= "assault" then
+            if (r == "assault" or r == "dismantler" or r == "healer") and c.memory.state ~= "assault" then
                 table.insert(staged, c)
                 if r == "healer" then
                     hasHealer = true
@@ -1704,7 +1749,187 @@ function CreepAgent:assault()
     end
 end
 
----11. Combat Healer: hugs frontline assault bruisers and sustains the wave under tower fire.
+---11. Siege Dismantler: breaches enemy towers, spawns, extensions, and ramparts (50 dmg/WORK).
+function CreepAgent:dismantler()
+    local creep = self.creep
+    if not self:handleAssaultTransit() then
+        return
+    end
+    -- Pull back toward a friendly healer when critically damaged (< 30% HP).
+    if creep.hits and creep.hitsMax and creep.hits < creep.hitsMax * 0.30 then
+        local myCreeps = self.room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
+        for _, ally in ipairs(myCreeps) do
+            if ally.id ~= creep.id and ally.memory and ally.memory.role == "healer" then
+                creep:moveTo(ally)
+                return
+            end
+        end
+    end
+
+    -- Prioritize hostile structures: Tower -> Spawn -> Extension -> Storage -> Rampart -> other.
+    local structs = self.room:find(screeps.FIND.HOSTILE_STRUCTURES) or {} ---@type Structure[]
+    local best = nil ---@type Structure|nil
+    local bestScore = -1
+    for _, s in ipairs(structs) do
+        if s.structureType ~= screeps.STRUCTURE.CONTROLLER and s.hits and s.hits > 0 then
+            local prio = 20
+            if s.structureType == screeps.STRUCTURE.TOWER then
+                prio = 100
+            elseif s.structureType == screeps.STRUCTURE.SPAWN then
+                prio = 90
+            elseif s.structureType == screeps.STRUCTURE.EXTENSION then
+                prio = 65
+            elseif s.structureType == screeps.STRUCTURE.STORAGE then
+                prio = 55
+            elseif s.structureType == screeps.STRUCTURE.RAMPART then
+                prio = 40
+            end
+            local d = creep.pos:getRangeTo(s)
+            local score = prio * 10 - d
+            if score > bestScore then
+                bestScore = score
+                best = s
+            end
+        end
+    end
+
+    if not best then
+        if creep.pos:getRangeTo(25, 25) > 5 then
+            creep:moveTo(25, 25)
+        end
+        return
+    end
+    self:drawTargetLine(best, "#ff9800")
+    if creep:dismantle(best) == screeps.ERR.NOT_IN_RANGE then
+        creep:moveTo(best)
+    end
+end
+
+---12. Remote Builder: plans and builds containers and roads in the assigned remote mining room.
+function CreepAgent:remoteBuilder()
+    local creep = self.creep
+    local room = self.room
+    local homeRoom = self.memory.homeRoom or room.name
+    self.memory.homeRoom = homeRoom
+    local rmem = screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom]
+    if room.name == homeRoom then
+        self.memory.targetRoom = rmem and rmem.remoteRoom or nil
+    end
+    local targetRoom = self.memory.targetRoom
+    if not targetRoom then
+        self:builder()
+        return
+    end
+
+    if room.name ~= targetRoom then
+        self:moveAcrossExit(targetRoom, nil)
+        return
+    end
+    if self:stepOffEdge() then
+        return
+    end
+
+    -- Evacuate if hostiles appear in the remote room.
+    local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {} ---@type Creep[]
+    if #hostiles > 0 then
+        self:moveAcrossExit(homeRoom, nil)
+        return
+    end
+
+    -- Periodically lay down remote source containers and roads back toward homeRoom.
+    if ((screeps.Game.time or 0) % 25) == 0 then
+        RoomPlanner.planRemoteRoom(room, homeRoom)
+    end
+
+    self:updateWorkingState()
+    if self.memory.working then
+        local sites = room:find(screeps.FIND.MY_CONSTRUCTION_SITES) or {} ---@type ConstructionSite[]
+        if #sites > 0 then
+            local target = CreepAgent.findClosest(creep.pos, sites)
+            if target then
+                self:drawTargetLine(target, "#ffd54f")
+                if creep:build(target) == screeps.ERR.NOT_IN_RANGE then
+                    creep:moveTo(target)
+                end
+                return
+            end
+        end
+        -- Maintain remote containers and roads.
+        local structs = room:find(screeps.FIND.STRUCTURES) or {} ---@type Structure[]
+        local damaged = nil ---@type Structure|nil
+        local lowestRatio = 0.85
+        for _, s in ipairs(structs) do
+            if (s.structureType == screeps.STRUCTURE.CONTAINER or s.structureType == screeps.STRUCTURE.ROAD)
+                and s.hits and s.hitsMax and s.hitsMax > 0 then
+                local ratio = s.hits / s.hitsMax
+                if ratio < lowestRatio then
+                    lowestRatio = ratio
+                    damaged = s
+                end
+            end
+        end
+        if damaged then
+            self:drawTargetLine(damaged, "#80cbc4")
+            if creep:repair(damaged) == screeps.ERR.NOT_IN_RANGE then
+                creep:moveTo(damaged)
+            end
+            return
+        end
+        -- Nothing to build/repair: return home to help build locally.
+        self:moveAcrossExit(homeRoom, nil)
+    else
+        -- Harvest or withdraw locally in the remote room.
+        local dropped = self:findDroppedEnergy()
+        if dropped then
+            if creep:pickup(dropped) == screeps.ERR.NOT_IN_RANGE then
+                creep:moveTo(dropped)
+            end
+            return
+        end
+        local src = self:findNearestSource()
+        if src then
+            if creep:harvest(src) == screeps.ERR.NOT_IN_RANGE then
+                creep:moveTo(src)
+            end
+        end
+    end
+end
+
+---13. Mineral Harvester: harvests room minerals at RCL 6+ (with Extractor) and deposits into Storage.
+function CreepAgent:mineralHarvester()
+    local creep = self.creep
+    local room = self.room
+    local minerals = room:find(screeps.FIND.MINERALS) or {} ---@type Mineral[]
+    local mineral = minerals[1]
+    local storage = CreepAgent.findRoomStorage(room)
+    if not mineral or not storage then
+        return
+    end
+    local resType = mineral.mineralType
+    local carried = (creep.store and resType and creep.store:getUsedCapacity(resType)) or 0
+    local free = (creep.store and creep.store:getFreeCapacity()) or 0
+
+    if carried > 0 and (free == 0 or (mineral.mineralAmount or 0) <= 0) then
+        self:drawTargetLine(storage, "#ce93d8")
+        if creep:transfer(storage, resType) == screeps.ERR.NOT_IN_RANGE then
+            creep:moveTo(storage)
+        end
+        return
+    end
+
+    if (mineral.mineralAmount or 0) > 0 then
+        self:drawTargetLine(mineral, "#ab47bc")
+        if creep:harvest(mineral) == screeps.ERR.NOT_IN_RANGE then
+            creep:moveTo(mineral)
+        end
+    elseif carried > 0 then
+        if creep:transfer(storage, resType) == screeps.ERR.NOT_IN_RANGE then
+            creep:moveTo(storage)
+        end
+    end
+end
+
+---14. Combat Healer: hugs frontline assault/dismantler creeps and sustains the wave under tower fire.
 function CreepAgent:healer()
     local creep = self.creep
     if creep.hits and creep.hitsMax and creep.hits < creep.hitsMax then
@@ -1717,7 +1942,7 @@ function CreepAgent:healer()
     local wounded = nil
     local lowestRatio = 1.0
     ---@type Creep[]
-    local bruisers = {}
+    local frontline = {}
     for _, ally in ipairs(myCreeps) do
         if ally.id ~= creep.id then
             if ally.hits and ally.hitsMax and ally.hitsMax > 0 and ally.hits < ally.hitsMax then
@@ -1727,8 +1952,8 @@ function CreepAgent:healer()
                     wounded = ally
                 end
             end
-            if ally.memory and ally.memory.role == "assault" then
-                table.insert(bruisers, ally)
+            if ally.memory and (ally.memory.role == "dismantler" or ally.memory.role == "assault") then
+                table.insert(frontline, ally)
             end
         end
     end
@@ -1744,11 +1969,11 @@ function CreepAgent:healer()
         end
         return
     end
-    if #bruisers > 0 then
-        local lead = CreepAgent.findClosest(creep.pos, bruisers)
+    if #frontline > 0 then
+        local lead = CreepAgent.findClosest(creep.pos, frontline)
         if lead then
             if creep.pos:getRangeTo(lead) <= 1 then
-                creep:heal(lead) -- pre-heal frontline bruiser
+                creep:heal(lead) -- pre-heal frontline siege/assault creep
             else
                 creep:moveTo(lead)
             end
@@ -1771,7 +1996,10 @@ local ROLE_HANDLERS <const> = {
     scout = CreepAgent.scout,
     remoteHarvester = CreepAgent.remoteHarvester,
     remoteHauler = CreepAgent.remoteHauler,
+    remoteBuilder = CreepAgent.remoteBuilder,
+    mineralHarvester = CreepAgent.mineralHarvester,
     assault = CreepAgent.assault,
+    dismantler = CreepAgent.dismantler,
     healer = CreepAgent.healer,
 }
 
