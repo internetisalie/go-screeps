@@ -1452,6 +1452,13 @@ func (s *viewerState) buildFloatingSelectionCard(th *theme.Theme) core.Widget {
 			s.selectedStackIdx = 0
 		}
 		if len(tileObjs) > 1 {
+			rows = append(rows,
+				basic.Container{Color: colBorderDim, Height: 1},
+				basic.Text{
+					Content: "Entities on tile (Tab to cycle):",
+					Style:   th.Text.Caption.WithSize(10.5).WithColor(colTextMuted),
+				},
+			)
 			var tabs []core.Widget
 			for idx, obj := range tileObjs {
 				i := idx

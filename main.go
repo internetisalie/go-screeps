@@ -1364,26 +1364,31 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			},
 		},
 	}
+	if obj.User != "" {
+		owner := obj.User
+		if u, ok := users[obj.User]; ok {
+			owner = u
+		}
+		headerRowChildren = append(headerRowChildren, basic.Container{
+			Color:   geom.Hex(0x111c2b),
+			Padding: geom.Symmetric(7, 3),
+			Radius:  5,
+			Border:  paint.Stroke{Width: 1, Color: geom.Hex(0x2a3f5c)},
+			Child: basic.Text{
+				Content: owner,
+				Style:   th.Text.Caption.WithSize(10.5).WithColor(geom.Hex(0xe2e8f0)),
+			},
+		})
+	}
 	if trailing != nil {
 		headerRowChildren = append(headerRowChildren, trailing)
 	}
 	staticRows := []core.Widget{
 		basic.Row{
 			Cross:    layout.CrossCenter,
-			Spacing:  theme.Space8,
+			Spacing:  6,
 			Children: headerRowChildren,
 		},
-	}
-
-	if obj.User != "" {
-		owner := obj.User
-		if u, ok := users[obj.User]; ok {
-			owner = u
-		}
-		staticRows = append(staticRows, basic.Text{
-			Content: "Owner: " + owner,
-			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
-		})
 	}
 	if obj.Type == "controller" {
 		staticRows = append(staticRows, basic.Text{
@@ -1401,6 +1406,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 	}
 
 	var carryParts int
+	var bodyWidget core.Widget
 	if (obj.Type == "creep" || obj.Type == "powerCreep") && obj.Raw != nil {
 		if body, ok := obj.Raw["body"].([]any); ok && len(body) > 0 {
 			for _, item := range body {
@@ -1410,7 +1416,11 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 					}
 				}
 			}
-			staticRows = append(staticRows, bodyPartsGraph(body, th))
+			ttl := -1
+			if ageAt, ok := intField(obj.Raw, "ageTime"); ok && gameTime > 0 {
+				ttl = max(0, ageAt-int(gameTime))
+			}
+			bodyWidget = bodyPartsGraph(body, ttl, th)
 		}
 	}
 
@@ -1418,7 +1428,10 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 	var dynRows []core.Widget
 
 	if obj.HitsMax > 0 {
-		dynRows = append(dynRows, metricBar(fmt.Sprintf("HP  %d / %d", obj.Hits, obj.HitsMax), obj.Hits, obj.HitsMax, geom.Hex(0x66bb6a), th))
+		dynRows = append(dynRows, metricBar(fmt.Sprintf("HP  %d / %d", obj.Hits, obj.HitsMax), obj.Hits, obj.HitsMax, geom.Hex(0x4ade80), th))
+	}
+	if bodyWidget != nil {
+		dynRows = append(dynRows, bodyWidget)
 	}
 
 	switch obj.Type {
@@ -1434,7 +1447,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 		}
 		if sm, ok := intField(obj.Raw, "safeMode"); ok && int64(sm) > gameTime {
 			rem := sm - int(gameTime)
-			dynRows = append(dynRows, metricBar(fmt.Sprintf("Safe Mode ACTIVE  %d ticks", rem), rem, 20000, geom.Hex(0x66bb6a), th))
+			dynRows = append(dynRows, metricBar(fmt.Sprintf("Safe Mode  %d ticks", rem), rem, 20000, geom.Hex(0x66bb6a), th))
 		} else if smAvail, ok := intField(obj.Raw, "safeModeAvailable"); ok {
 			dynRows = append(dynRows, basic.Text{
 				Content: fmt.Sprintf("Safe Mode Available: %d", smAvail),
@@ -1448,7 +1461,7 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 					resOwner = u
 				}
 				rem := resEnd - int(gameTime)
-				dynRows = append(dynRows, metricBar(fmt.Sprintf("Reserved by %s  %d ticks", resOwner, rem), rem, 5000, geom.Hex(0x26c6da), th))
+				dynRows = append(dynRows, metricBar(fmt.Sprintf("Reserved (%s)  %d ticks", resOwner, rem), rem, 5000, geom.Hex(0x26c6da), th))
 			}
 		}
 		if ub, ok := intField(obj.Raw, "upgradeBlocked"); ok && int64(ub) > gameTime {
@@ -1477,30 +1490,52 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 			spawnAt, _ := intField(obj.Spawning, "spawnTime")
 			rem := max(0, spawnAt-int(gameTime))
 			done := max(0, need-rem)
-			dynRows = append(dynRows, metricBar(fmt.Sprintf("Spawning %s  (%d / %d)", name, done, need), done, max(1, need), geom.Hex(0x00e676), th))
+			dynRows = append(dynRows, metricBar(fmt.Sprintf("Spawning  %s (%d/%d)", name, done, need), done, max(1, need), geom.Hex(0x38bdf8), th))
 		}
 	case "creep", "powerCreep":
-		if ageAt, ok := intField(obj.Raw, "ageTime"); ok && gameTime > 0 {
-			ttl := max(0, ageAt-int(gameTime))
-			dynRows = append(dynRows, metricBar(fmt.Sprintf("TTL  %d / 1500", ttl), ttl, 1500, geom.Hex(0x42a5f5), th))
+		if fat, ok := intField(obj.Raw, "fatigue"); ok && fat > 0 {
+			dynRows = append(dynRows, metricBar(fmt.Sprintf("Fatigue  %d", fat), min(fat, 50), 50, geom.Hex(0xffa726), th))
 		}
-		fat, _ := intField(obj.Raw, "fatigue")
-		dynRows = append(dynRows, metricBar(fmt.Sprintf("Fatigue  %d", fat), min(fat, 50), 50, geom.Hex(0xffa726), th))
 		if act := formatActionLog(obj); act != "" {
-			dynRows = append(dynRows, basic.Text{
-				Content: act,
-				Style:   th.Text.Caption.WithColor(geom.Hex(0x4fc3f7)),
+			dynRows = append(dynRows, basic.Row{
+				Size:    layout.MainMin,
+				Cross:   layout.CrossCenter,
+				Spacing: 4,
+				Children: []core.Widget{
+					basic.Text{
+						Content: "Action:",
+						Style:   th.Text.Caption.WithColor(colTextMuted),
+					},
+					basic.Expanded{
+						Child: basic.Text{
+							Content: act,
+							Style:   th.Text.Caption.WithColor(colCyan),
+						},
+					},
+				},
 			})
 		}
 		if creepMemJSON != "" {
+			memHeader := fmt.Sprintf("Memory.creeps[%q]", obj.Name)
 			dynRows = append(dynRows, basic.Container{
-				Color:   th.Color.Card,
-				Padding: geom.All(theme.Space4),
-				Radius:  th.Radius.Control,
-				Border:  paint.Stroke{Width: 1, Color: th.Color.Hair},
-				Child: basic.Text{
-					Content: "Memory: " + creepMemJSON,
-					Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+				Color:   geom.Hex(0x0b111b),
+				Padding: geom.All(8),
+				Radius:  6,
+				Border:  paint.Stroke{Width: 1, Color: colBorderDim},
+				Child: basic.Column{
+					Size:    layout.MainMin,
+					Cross:   layout.CrossStretch,
+					Spacing: 4,
+					Children: []core.Widget{
+						basic.Text{
+							Content: memHeader,
+							Style:   th.Text.Caption.WithSize(10.5).WithColor(colTextMuted),
+						},
+						basic.Text{
+							Content: creepMemJSON,
+							Style:   th.Text.Caption.WithSize(10.5).WithColor(colTextBright),
+						},
+					},
 				},
 			})
 		}
@@ -1556,7 +1591,30 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 	}
 }
 
-func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
+func bodyPartLetter(typ string) (string, geom.Color) {
+	switch typ {
+	case "tough":
+		return "T", geom.Hex(0xffffff)
+	case "work":
+		return "W", geom.Hex(0x111827)
+	case "carry":
+		return "C", geom.Hex(0xffffff)
+	case "move":
+		return "M", geom.Hex(0x111827)
+	case "attack":
+		return "A", geom.Hex(0xffffff)
+	case "ranged_attack":
+		return "R", geom.Hex(0xffffff)
+	case "heal":
+		return "H", geom.Hex(0x111827)
+	case "claim":
+		return "K", geom.Hex(0xffffff)
+	default:
+		return "?", geom.Hex(0xffffff)
+	}
+}
+
+func bodyPartsGraph(body []any, ttl int, th *theme.Theme) core.Widget {
 	type partInfo struct {
 		typ  string
 		dead bool
@@ -1587,15 +1645,24 @@ func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
 	var cells []core.Widget
 	for _, p := range parts {
 		col := bodyPartColor(p.typ)
+		letter, fg := bodyPartLetter(p.typ)
 		if p.dead {
 			col.A = 0.25
+			fg.A = 0.4
 		}
 		cells = append(cells, basic.SizedBox{
-			Width:  10,
-			Height: 10,
+			Width:  16,
+			Height: 16,
 			Child: basic.Container{
 				Color:  col,
-				Radius: 2,
+				Radius: 3,
+				Child: basic.Align{
+					Alignment: layout.AlignCenter,
+					Child: basic.Text{
+						Content: letter,
+						Style:   th.Text.Caption.WithSize(9.5).WithWeight(700).WithColor(fg),
+					},
+				},
 			},
 		})
 	}
@@ -1627,14 +1694,29 @@ func bodyPartsGraph(body []any, th *theme.Theme) core.Widget {
 		})
 	}
 
+	headerRow := []core.Widget{
+		basic.Expanded{
+			Child: basic.Text{
+				Content: fmt.Sprintf("Body (%d parts)", len(cells)),
+				Style:   th.Text.Caption.WithColor(colTextMuted),
+			},
+		},
+	}
+	if ttl >= 0 {
+		headerRow = append(headerRow, basic.Text{
+			Content: fmt.Sprintf("TTL %d", ttl),
+			Style:   th.Text.Caption.WithColor(colTextMuted),
+		})
+	}
+
 	return basic.Column{
 		Size:    layout.MainMin,
 		Cross:   layout.CrossStretch,
-		Spacing: 4,
+		Spacing: 5,
 		Children: []core.Widget{
-			basic.Text{
-				Content: fmt.Sprintf("Body (%d/50)", len(cells)),
-				Style:   th.Text.Caption.WithColor(th.Color.Ink2),
+			basic.Row{
+				Cross:    layout.CrossCenter,
+				Children: headerRow,
 			},
 			basic.Wrap{
 				Spacing:    3,
@@ -1718,21 +1800,36 @@ func metricBar(label string, val, maxVal int, fill geom.Color, th *theme.Theme) 
 	if maxVal > 0 {
 		ratio = geom.Clamp32(float32(val)/float32(maxVal), 0, 1)
 	}
-	const barW = float32(276)
+	const barW = float32(274)
+	var header core.Widget
+	if left, right, ok := strings.Cut(label, "  "); ok {
+		header = basic.Row{
+			Cross: layout.CrossCenter,
+			Children: []core.Widget{
+				basic.Expanded{
+					Child: basic.Text{Content: left, Style: th.Text.Caption.WithColor(colTextMuted)},
+				},
+				basic.Text{Content: right, Style: th.Text.Caption.WithColor(colTextBright)},
+			},
+		}
+	} else {
+		header = basic.Text{Content: label, Style: th.Text.Caption.WithColor(colTextBright)}
+	}
 	return basic.Column{
+		Size:    layout.MainMin,
 		Cross:   layout.CrossStretch,
-		Spacing: 2,
+		Spacing: 3,
 		Children: []core.Widget{
-			basic.Text{Content: label, Style: th.Text.Caption.WithColor(th.Color.Ink)},
+			header,
 			basic.Container{
-				Color:  geom.Hex(0x263238),
-				Radius: 3,
+				Color:  geom.Hex(0x1b2636),
+				Radius: 3.5,
 				Child: basic.Align{
 					Alignment: layout.AlignCenterLeft,
 					Child: basic.SizedBox{
 						Width:  barW * ratio,
-						Height: 6,
-						Child:  basic.Container{Color: fill, Radius: 3},
+						Height: 7,
+						Child:  basic.Container{Color: fill, Radius: 3.5},
 					},
 				},
 			},
