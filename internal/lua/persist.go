@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
-	lua "github.com/yuin/gopher-lua"
+	rt "github.com/arnodel/golua/runtime"
 
 	"go-screeps/internal/engine"
 )
@@ -37,38 +37,41 @@ type SaveFile struct {
 }
 
 // luaValueToGo converts a Lua value to a JSON-safe Go value.
-// Unsupported types (functions, userdata, threads, channels, NaN/Inf) return (nil, false).
-func luaValueToGo(v lua.LValue, visited map[*lua.LTable]bool, depth int) (any, bool) {
-	if v == nil || depth > maxPersistDepth {
+// Unsupported types (functions, userdata, threads, NaN/Inf) return (nil, false).
+func luaValueToGo(v rt.Value, visited map[*rt.Table]bool, depth int) (any, bool) {
+	if v.IsNil() || depth > maxPersistDepth {
 		return nil, false
 	}
-	switch val := v.(type) {
-	case *lua.LNilType:
+	switch v.Type() {
+	case rt.NilType:
 		return nil, false
-	case lua.LBool:
-		return bool(val), true
-	case lua.LNumber:
-		f := float64(val)
+	case rt.BoolType:
+		return v.AsBool(), true
+	case rt.IntType:
+		return float64(v.AsInt()), true
+	case rt.FloatType:
+		f := v.AsFloat()
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return nil, false
 		}
 		return f, true
-	case lua.LString:
-		return string(val), true
-	case *lua.LTable:
-		if visited[val] {
+	case rt.StringType:
+		return v.AsString(), true
+	case rt.TableType:
+		tbl := v.AsTable()
+		if visited[tbl] {
 			return nil, false
 		}
-		return luaTableToGo(val, visited, depth+1), true
+		return luaTableToGo(tbl, visited, depth+1), true
 	default:
-		// Functions, userdata, threads, channels are skipped cleanly.
+		// Functions, userdata, threads are skipped cleanly.
 		return nil, false
 	}
 }
 
 // luaTableToGo converts a Lua table to either []any (if it is a contiguous 1..N array)
 // or map[string]any (for associative tables or empty tables).
-func luaTableToGo(tbl *lua.LTable, visited map[*lua.LTable]bool, depth int) any {
+func luaTableToGo(tbl *rt.Table, visited map[*rt.Table]bool, depth int) any {
 	if tbl == nil || depth > maxPersistDepth {
 		return map[string]any{}
 	}
@@ -76,20 +79,31 @@ func luaTableToGo(tbl *lua.LTable, visited map[*lua.LTable]bool, depth int) any 
 	defer delete(visited, tbl)
 
 	type kv struct {
-		key lua.LValue
+		key rt.Value
 		val any
 	}
 	var entries []kv
 	allIntKeys := true
 	maxIdx := 0
 
-	tbl.ForEach(func(k, v lua.LValue) {
-		gv, ok := luaValueToGo(v, visited, depth)
-		if !ok {
-			return
+	for k, v, ok := tbl.Next(rt.NilValue); ok && !k.IsNil(); k, v, ok = tbl.Next(k) {
+		gv, valid := luaValueToGo(v, visited, depth)
+		if !valid {
+			continue
 		}
-		if num, isNum := k.(lua.LNumber); isNum {
-			f := float64(num)
+		switch k.Type() {
+		case rt.IntType:
+			n := k.AsInt()
+			if n >= 1 && n <= math.MaxInt32 {
+				idx := int(n)
+				if idx > maxIdx {
+					maxIdx = idx
+				}
+			} else {
+				allIntKeys = false
+			}
+		case rt.FloatType:
+			f := k.AsFloat()
 			if f >= 1 && f == math.Trunc(f) && f <= float64(math.MaxInt32) {
 				idx := int(f)
 				if idx > maxIdx {
@@ -98,11 +112,11 @@ func luaTableToGo(tbl *lua.LTable, visited map[*lua.LTable]bool, depth int) any 
 			} else {
 				allIntKeys = false
 			}
-		} else {
+		default:
 			allIntKeys = false
 		}
 		entries = append(entries, kv{key: k, val: gv})
-	})
+	}
 
 	if len(entries) == 0 {
 		return map[string]any{}
@@ -113,7 +127,12 @@ func luaTableToGo(tbl *lua.LTable, visited map[*lua.LTable]bool, depth int) any 
 		valid := true
 		seen := make([]bool, len(entries))
 		for _, e := range entries {
-			idx := int(float64(e.key.(lua.LNumber))) - 1
+			var idx int
+			if e.key.Type() == rt.IntType {
+				idx = int(e.key.AsInt()) - 1
+			} else {
+				idx = int(e.key.AsFloat()) - 1
+			}
 			if idx < 0 || idx >= len(arr) || seen[idx] {
 				valid = false
 				break
@@ -137,18 +156,20 @@ func luaTableToGo(tbl *lua.LTable, visited map[*lua.LTable]bool, depth int) any 
 	return m
 }
 
-func luaKeyToString(k lua.LValue) (string, bool) {
-	switch kv := k.(type) {
-	case lua.LString:
-		return string(kv), true
-	case lua.LNumber:
-		f := float64(kv)
+func luaKeyToString(k rt.Value) (string, bool) {
+	switch k.Type() {
+	case rt.StringType:
+		return k.AsString(), true
+	case rt.IntType:
+		return strconv.FormatInt(k.AsInt(), 10), true
+	case rt.FloatType:
+		f := k.AsFloat()
 		if math.IsNaN(f) || math.IsInf(f, 0) {
 			return "", false
 		}
 		return strconv.FormatFloat(f, 'f', -1, 64), true
-	case lua.LBool:
-		if bool(kv) {
+	case rt.BoolType:
+		if k.AsBool() {
 			return "true", true
 		}
 		return "false", true
@@ -158,75 +179,86 @@ func luaKeyToString(k lua.LValue) (string, bool) {
 }
 
 // luaTableToMap converts a top-level Lua table (such as Memory) to map[string]any.
-func luaTableToMap(tbl *lua.LTable) map[string]any {
+func luaTableToMap(tbl *rt.Table) map[string]any {
 	out := make(map[string]any)
 	if tbl == nil {
 		return out
 	}
-	visited := map[*lua.LTable]bool{tbl: true}
-	tbl.ForEach(func(k, v lua.LValue) {
-		keyStr, ok := luaKeyToString(k)
-		if !ok {
-			return
+	visited := map[*rt.Table]bool{tbl: true}
+	for k, v, ok := tbl.Next(rt.NilValue); ok && !k.IsNil(); k, v, ok = tbl.Next(k) {
+		keyStr, okKey := luaKeyToString(k)
+		if !okKey {
+			continue
 		}
-		gv, ok := luaValueToGo(v, visited, 1)
-		if !ok {
-			return
+		gv, okVal := luaValueToGo(v, visited, 1)
+		if !okVal {
+			continue
 		}
 		out[keyStr] = gv
-	})
+	}
 	return out
 }
 
+// floatToLuaValue preserves integer-valued JSON numbers as Lua 5.4 integers.
+func floatToLuaValue(f float64) rt.Value {
+	if !math.IsNaN(f) && !math.IsInf(f, 0) && f == math.Trunc(f) && f >= -9007199254740992 && f <= 9007199254740992 {
+		return rt.IntValue(int64(f))
+	}
+	return rt.FloatValue(f)
+}
+
 // goValueToLua converts a JSON-decoded Go value into a Lua value.
-func goValueToLua(L *lua.LState, v any) lua.LValue {
+func goValueToLua(v any) rt.Value {
 	if v == nil {
-		return lua.LNil
+		return rt.NilValue
 	}
 	switch val := v.(type) {
 	case bool:
-		return lua.LBool(val)
+		return rt.BoolValue(val)
 	case string:
-		return lua.LString(val)
+		return rt.StringValue(val)
 	case float64:
-		return lua.LNumber(val)
+		return floatToLuaValue(val)
 	case float32:
-		return lua.LNumber(val)
+		return floatToLuaValue(float64(val))
 	case int:
-		return lua.LNumber(val)
+		return rt.IntValue(int64(val))
 	case int64:
-		return lua.LNumber(val)
+		return rt.IntValue(val)
 	case int32:
-		return lua.LNumber(val)
+		return rt.IntValue(int64(val))
 	case uint:
-		return lua.LNumber(val)
+		return rt.IntValue(int64(val))
 	case uint64:
-		return lua.LNumber(val)
+		return rt.IntValue(int64(val))
 	case json.Number:
+		if i, err := val.Int64(); err == nil {
+			return rt.IntValue(i)
+		}
 		if f, err := val.Float64(); err == nil {
-			return lua.LNumber(f)
+			return floatToLuaValue(f)
 		}
-		return lua.LString(val.String())
+		return rt.StringValue(val.String())
 	case []any:
-		tbl := L.NewTable()
+		tbl := rt.NewTable()
 		for i, item := range val {
-			tbl.RawSetInt(i+1, goValueToLua(L, item))
+			tbl.Set(rt.IntValue(int64(i+1)), goValueToLua(item))
 		}
-		return tbl
+		return rt.TableValue(tbl)
 	case map[string]any:
-		return goMapToLuaTable(L, val)
+		return rt.TableValue(goMapToLuaTable(val))
 	default:
-		return lua.LNil
+		return rt.NilValue
 	}
 }
 
 // goMapToLuaTable converts a Go map[string]any into a Lua table.
-func goMapToLuaTable(L *lua.LState, m map[string]any) *lua.LTable {
-	tbl := L.NewTable()
+func goMapToLuaTable(m map[string]any) *rt.Table {
+	tbl := rt.NewTable()
 	for k, v := range m {
-		lv := goValueToLua(L, v)
-		if lv != lua.LNil {
-			tbl.RawSetString(k, lv)
+		lv := goValueToLua(v)
+		if !lv.IsNil() {
+			tbl.Set(rt.StringValue(k), lv)
 		}
 	}
 	return tbl
@@ -234,11 +266,11 @@ func goMapToLuaTable(L *lua.LState, m map[string]any) *lua.LTable {
 
 // ExportMemory converts the bot VM's global Lua Memory table into a JSON-serializable map.
 func (vm *BotVM) ExportMemory() map[string]any {
-	if vm == nil || vm.L == nil {
+	if vm == nil || vm.R == nil {
 		return map[string]any{}
 	}
-	memVal := vm.L.GetGlobal("Memory")
-	tbl, ok := memVal.(*lua.LTable)
+	memVal := vm.R.GlobalEnv().Get(rt.StringValue("Memory"))
+	tbl, ok := memVal.TryTable()
 	if !ok {
 		return map[string]any{}
 	}
@@ -247,17 +279,17 @@ func (vm *BotVM) ExportMemory() map[string]any {
 
 // ImportMemory replaces the bot VM's global Lua Memory table with data from mem.
 func (vm *BotVM) ImportMemory(mem map[string]any) {
-	if vm == nil || vm.L == nil {
+	if vm == nil || vm.R == nil {
 		return
 	}
-	tbl := goMapToLuaTable(vm.L, mem)
-	if tbl.RawGetString("creeps") == lua.LNil {
-		tbl.RawSetString("creeps", vm.L.NewTable())
+	tbl := goMapToLuaTable(mem)
+	if tbl.Get(rt.StringValue("creeps")).IsNil() {
+		tbl.Set(rt.StringValue("creeps"), rt.TableValue(rt.NewTable()))
 	}
-	if tbl.RawGetString("rooms") == lua.LNil {
-		tbl.RawSetString("rooms", vm.L.NewTable())
+	if tbl.Get(rt.StringValue("rooms")).IsNil() {
+		tbl.Set(rt.StringValue("rooms"), rt.TableValue(rt.NewTable()))
 	}
-	vm.L.SetGlobal("Memory", tbl)
+	vm.R.GlobalEnv().Set(rt.StringValue("Memory"), rt.TableValue(tbl))
 }
 
 // SetStatePath configures the file path for automatic periodic saves and shutdown save.
@@ -292,7 +324,7 @@ func (r *LocalRunner) saveStateLocked(path string) error {
 
 	memories := make(map[string]map[string]any, len(r.bots))
 	for _, vm := range r.bots {
-		if vm != nil && vm.L != nil {
+		if vm != nil && vm.R != nil {
 			memories[vm.Username] = vm.ExportMemory()
 		}
 	}

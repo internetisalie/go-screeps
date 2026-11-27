@@ -3,12 +3,13 @@ module go-screeps
 go 1.27.3
 
 require (
+	github.com/arnodel/golua v0.4.1
 	github.com/bankai-tensei/gowaku v0.3.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/yuin/gopher-lua v1.1.2
 )
 
 require (
+	github.com/arnodel/strftime v0.1.6 // indirect
 	github.com/ebitengine/purego v0.11.3 // indirect
 	github.com/go-text/typesetting v0.3.5 // indirect
 	github.com/godbus/dbus/v5 v5.2.4 // indirect

@@ -2,13 +2,22 @@ package lua
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"strings"
 	"sync"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
+	"github.com/arnodel/golua/lib"
+	"github.com/arnodel/golua/lib/base"
+	"github.com/arnodel/golua/lib/mathlib"
+	"github.com/arnodel/golua/lib/packagelib"
+	"github.com/arnodel/golua/lib/stringlib"
+	"github.com/arnodel/golua/lib/tablelib"
+	"github.com/arnodel/golua/lib/utf8lib"
+	rt "github.com/arnodel/golua/runtime"
 
 	"go-screeps/internal/engine"
 )
@@ -16,13 +25,16 @@ import (
 const (
 	defaultCPULimit = 150 * time.Millisecond
 	defaultMaxLogs  = 200
+
+	botComplianceFlags = rt.ComplyCpuSafe | rt.ComplyMemSafe | rt.ComplyTimeSafe | rt.ComplyIoSafe
 )
 
-// BotVM manages a single sandboxed gopher-lua VM for one Screeps player.
+// BotVM manages a single sandboxed golua (Lua 5.4) VM for one Screeps player.
 type BotVM struct {
 	Username  string
 	UserID    string
-	L         *lua.LState
+	R         *rt.Runtime
+	cleanup   func()
 	CPULimit  time.Duration
 	LastCPU   time.Duration
 	LastError string
@@ -37,20 +49,20 @@ type BotVM struct {
 	// Per-tick state used by API bindings.
 	world     *engine.World
 	tickStart time.Time
-	objCache  map[string]*lua.LTable
-	roomCache map[string]*lua.LTable
+	objCache  map[string]*rt.Table
+	roomCache map[string]*rt.Table
 
 	// Reusable metatables.
-	roomMT     *lua.LTable
-	roomPosMT  *lua.LTable
-	terrainMT  *lua.LTable
-	visualMT   *lua.LTable
-	storeMT    *lua.LTable
-	creepMT    *lua.LTable
-	spawnMT    *lua.LTable
-	towerMT    *lua.LTable
-	linkMT     *lua.LTable
-	costMatMT  *lua.LTable
+	roomMT    *rt.Table
+	roomPosMT *rt.Table
+	terrainMT *rt.Table
+	visualMT  *rt.Table
+	storeMT   *rt.Table
+	creepMT   *rt.Table
+	spawnMT   *rt.Table
+	towerMT   *rt.Table
+	linkMT    *rt.Table
+	costMatMT *rt.Table
 
 	// Thread-safe log ring buffer.
 	logMu   sync.Mutex
@@ -58,61 +70,57 @@ type BotVM struct {
 	maxLogs int
 }
 
-// NewBotVM creates a sandboxed Lua 5.1 VM for username/userID with Screeps globals and persistent Memory.
+// NewBotVM creates a sandboxed Lua 5.4 VM for username/userID with Screeps globals and persistent Memory.
 func NewBotVM(username, userID string) *BotVM {
-	L := lua.NewState(lua.Options{
-		SkipOpenLibs: true,
-	})
+	r := rt.New(io.Discard)
 
-	// Open only safe standard libraries (no io, os, debug, channel).
-	for _, pair := range []struct {
-		name string
-		fn   lua.LGFunction
-	}{
-		{lua.LoadLibName, lua.OpenPackage},
-		{lua.BaseLibName, lua.OpenBase},
-		{lua.TabLibName, lua.OpenTable},
-		{lua.StringLibName, lua.OpenString},
-		{lua.MathLibName, lua.OpenMath},
-	} {
-		L.Push(L.NewFunction(pair.fn))
-		L.Push(lua.LString(pair.name))
-		L.Call(1, 0)
-	}
+	// Open only safe standard libraries (no io, os, debug, golib, runtimelib).
+	cleanup := lib.LoadLibs(
+		r,
+		base.LibLoader,
+		packagelib.LibLoader,
+		tablelib.LibLoader,
+		stringlib.LibLoader,
+		mathlib.LibLoader,
+		utf8lib.LibLoader,
+	)
+
+	env := r.GlobalEnv()
 
 	// Remove filesystem / unsafe base globals.
-	L.SetGlobal("dofile", lua.LNil)
-	L.SetGlobal("loadfile", lua.LNil)
-	if pkg, ok := L.GetGlobal("package").(*lua.LTable); ok {
-		pkg.RawSetString("loadlib", lua.LNil)
-		pkg.RawSetString("cpath", lua.LString(""))
-		pkg.RawSetString("path", lua.LString(""))
+	env.Set(rt.StringValue("dofile"), rt.NilValue)
+	env.Set(rt.StringValue("loadfile"), rt.NilValue)
+	if pkg, ok := env.Get(rt.StringValue("package")).TryTable(); ok {
+		pkg.Set(rt.StringValue("loadlib"), rt.NilValue)
+		pkg.Set(rt.StringValue("cpath"), rt.StringValue(""))
+		pkg.Set(rt.StringValue("path"), rt.StringValue(""))
 	}
 
 	vm := &BotVM{
 		Username:      username,
 		UserID:        userID,
-		L:             L,
+		R:             r,
+		cleanup:       cleanup,
 		CPULimit:      defaultCPULimit,
 		loadedModules: make(map[string]bool),
 		maxLogs:       defaultMaxLogs,
 	}
 
 	// Install sandboxed print and console.log.
-	printFn := L.NewFunction(vm.luaPrint)
-	L.SetGlobal("print", printFn)
-	consoleTbl := L.NewTable()
-	consoleTbl.RawSetString("log", printFn)
-	L.SetGlobal("console", consoleTbl)
+	printFn := vm.newGoFunc("print", vm.luaPrint, 0, true)
+	env.Set(rt.StringValue("print"), rt.FunctionValue(printFn))
+	consoleTbl := rt.NewTable()
+	consoleTbl.Set(rt.StringValue("log"), rt.FunctionValue(printFn))
+	env.Set(rt.StringValue("console"), rt.TableValue(consoleTbl))
 
 	// Install sandboxed require().
-	L.SetGlobal("require", L.NewFunction(vm.luaRequire))
+	env.Set(rt.StringValue("require"), rt.FunctionValue(vm.newGoFunc("require", vm.luaRequire, 1, false)))
 
 	// Initialize persistent Memory table.
-	mem := L.NewTable()
-	mem.RawSetString("creeps", L.NewTable())
-	mem.RawSetString("rooms", L.NewTable())
-	L.SetGlobal("Memory", mem)
+	mem := rt.NewTable()
+	mem.Set(rt.StringValue("creeps"), rt.TableValue(rt.NewTable()))
+	mem.Set(rt.StringValue("rooms"), rt.TableValue(rt.NewTable()))
+	env.Set(rt.StringValue("Memory"), rt.TableValue(mem))
 
 	// Register Screeps constants, metatables, and PathFinder.
 	vm.initAPI()
@@ -120,11 +128,34 @@ func NewBotVM(username, userID string) *BotVM {
 	return vm
 }
 
-// Close shuts down the underlying Lua state.
+func (vm *BotVM) newGoFunc(name string, fn rt.GoFunctionFunc, nArgs int, hasEtc bool) *rt.GoFunction {
+	gf := rt.NewGoFunction(fn, name, nArgs, hasEtc)
+	gf.SolemnlyDeclareCompliance(botComplianceFlags)
+	return gf
+}
+
+// DoString compiles and executes a Lua chunk in the VM's global environment.
+func (vm *BotVM) DoString(src string) error {
+	if vm.R == nil {
+		return fmt.Errorf("bot VM %q is closed", vm.Username)
+	}
+	clos, err := vm.R.CompileAndLoadLuaChunk("<string>", []byte(src), rt.TableValue(vm.R.GlobalEnv()))
+	if err != nil {
+		return err
+	}
+	_, err = rt.Call1(vm.R.MainThread(), rt.FunctionValue(clos))
+	return err
+}
+
+// Close shuts down the underlying Lua runtime.
 func (vm *BotVM) Close() {
-	if vm.L != nil {
-		vm.L.Close()
-		vm.L = nil
+	if vm.cleanup != nil {
+		vm.cleanup()
+		vm.cleanup = nil
+	}
+	if vm.R != nil {
+		vm.R.Close(nil)
+		vm.R = nil
 	}
 }
 
@@ -152,11 +183,16 @@ func (vm *BotVM) Logs() []string {
 	return out
 }
 
-func (vm *BotVM) luaPrint(L *lua.LState) int {
-	n := L.GetTop()
-	parts := make([]string, n)
-	for i := 1; i <= n; i++ {
-		parts[i-1] = L.ToStringMeta(L.Get(i)).String()
+func (vm *BotVM) luaPrint(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	args := c.Etc()
+	parts := make([]string, len(args))
+	for i, v := range args {
+		s, err := base.ToString(t, v)
+		if err != nil {
+			parts[i] = v.TypeName()
+		} else {
+			parts[i] = s
+		}
 	}
 	msg := strings.Join(parts, "\t")
 	if vm.Username != "" {
@@ -164,13 +200,13 @@ func (vm *BotVM) luaPrint(L *lua.LState) int {
 	} else {
 		vm.AppendLog(msg)
 	}
-	return 0
+	return c.Next(), nil
 }
 
 // RunTick executes one tick of the bot's global loop() function against world.
-// Enforces CPULimit via context.WithTimeout and checks disk hot-reload if configured.
+// Enforces CPULimit via golua's native RuntimeContext HardLimits.Millis and checks disk hot-reload if configured.
 func (vm *BotVM) RunTick(world *engine.World) error {
-	if vm.L == nil {
+	if vm.R == nil {
 		return fmt.Errorf("bot VM %q is closed", vm.Username)
 	}
 
@@ -187,30 +223,37 @@ func (vm *BotVM) RunTick(world *engine.World) error {
 	vm.tickStart = time.Now()
 	vm.refreshGame(world)
 
-	limit := vm.CPULimit
-	if limit <= 0 {
-		limit = defaultCPULimit
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
-	defer cancel()
-	vm.L.SetContext(ctx)
-	defer vm.L.RemoveContext()
-
-	loopFn := vm.L.GetGlobal("loop")
-	if loopFn.Type() != lua.LTFunction {
+	loopFn := vm.R.GlobalEnv().Get(rt.StringValue("loop"))
+	if loopFn.Type() != rt.FunctionType {
 		vm.LastCPU = time.Since(vm.tickStart)
 		vm.LastError = ""
 		return nil
 	}
 
-	err := vm.L.CallByParam(lua.P{
-		Fn:      loopFn,
-		NRet:    0,
-		Protect: true,
+	limit := vm.CPULimit
+	if limit <= 0 {
+		limit = defaultCPULimit
+	}
+	limitMs := uint64(limit / time.Millisecond)
+	if limitMs == 0 {
+		limitMs = 1
+	}
+
+	ctx, err := vm.R.MainThread().CallContext(rt.RuntimeContextDef{
+		HardLimits: rt.RuntimeResources{
+			Millis: limitMs,
+		},
+	}, func() error {
+		_, callErr := rt.Call1(vm.R.MainThread(), loopFn)
+		return callErr
 	})
 	vm.LastCPU = time.Since(vm.tickStart)
 
 	if err != nil {
+		var termErr rt.ContextTerminationError
+		if (ctx != nil && ctx.Status() == rt.StatusKilled) || errors.As(err, &termErr) {
+			err = fmt.Errorf("%w: %v", context.DeadlineExceeded, err)
+		}
 		vm.LastError = err.Error()
 		vm.AppendLog(fmt.Sprintf("[%s] error: %v", vm.Username, err))
 		return err

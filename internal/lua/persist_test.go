@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	lua "github.com/yuin/gopher-lua"
+	rt "github.com/arnodel/golua/runtime"
 
 	"go-screeps/internal/engine"
 )
@@ -125,7 +125,7 @@ end
 	}
 
 	// Verify specific nested values directly inside Lua.
-	if err := restoredVM.L.DoString(`
+	if err := restoredVM.DoString(`
 		assert(Memory.ticks == 15, "expected Memory.ticks == 15, got " .. tostring(Memory.ticks))
 		assert(Memory.flag == true, "expected Memory.flag == true")
 		assert(Memory.label == "alpha-colony", "expected Memory.label == alpha-colony")
@@ -150,7 +150,7 @@ end
 	if restoredVM.LastError != "" {
 		t.Fatalf("restored bot Lua error after stepping: %s", restoredVM.LastError)
 	}
-	if err := restoredVM.L.DoString(`
+	if err := restoredVM.DoString(`
 		assert(Memory.ticks == 25, "expected Memory.ticks == 25 after 10 more ticks, got " .. tostring(Memory.ticks))
 	`); err != nil {
 		t.Fatalf("Lua continuation assertion failed: %v", err)
@@ -222,11 +222,10 @@ func TestMemoryConversionEdgeCases(t *testing.T) {
 	defer vm.Close()
 
 	// Create cyclic table, userdata, function, and mixed values in Memory.
-	ud := vm.L.NewUserData()
-	ud.Value = "secret"
-	vm.L.SetGlobal("testUD", ud)
+	ud := rt.NewUserData("secret", nil)
+	vm.R.GlobalEnv().Set(rt.StringValue("testUD"), rt.UserDataValue(ud))
 
-	if err := vm.L.DoString(`
+	if err := vm.DoString(`
 		local cyc = { name = "root" }
 		cyc.self = cyc
 		Memory.cyclic = cyc
@@ -259,12 +258,12 @@ func TestMemoryConversionEdgeCases(t *testing.T) {
 
 	// Import nil should still preserve Memory.creeps and Memory.rooms tables.
 	vm.ImportMemory(nil)
-	memVal := vm.L.GetGlobal("Memory")
-	tbl, ok := memVal.(*lua.LTable)
+	memVal := vm.R.GlobalEnv().Get(rt.StringValue("Memory"))
+	tbl, ok := memVal.TryTable()
 	if !ok {
 		t.Fatalf("expected Memory table after ImportMemory(nil)")
 	}
-	if tbl.RawGetString("creeps").Type() != lua.LTTable || tbl.RawGetString("rooms").Type() != lua.LTTable {
+	if tbl.Get(rt.StringValue("creeps")).Type() != rt.TableType || tbl.Get(rt.StringValue("rooms")).Type() != rt.TableType {
 		t.Fatalf("expected Memory.creeps and Memory.rooms tables after ImportMemory(nil)")
 	}
 }

@@ -1,15 +1,64 @@
 package bots
 
 import (
+	"io"
 	"io/fs"
 	"testing"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
+	"github.com/arnodel/golua/lib"
+	"github.com/arnodel/golua/lib/base"
+	"github.com/arnodel/golua/lib/mathlib"
+	"github.com/arnodel/golua/lib/packagelib"
+	"github.com/arnodel/golua/lib/stringlib"
+	"github.com/arnodel/golua/lib/tablelib"
+	"github.com/arnodel/golua/lib/utf8lib"
+	rt "github.com/arnodel/golua/runtime"
 
 	"go-screeps/internal/engine"
 	botlua "go-screeps/internal/lua"
 )
+
+func newTestLuaRuntime(t *testing.T) *rt.Runtime {
+	t.Helper()
+	r := rt.New(io.Discard)
+	cleanup := lib.LoadLibs(
+		r,
+		base.LibLoader,
+		packagelib.LibLoader,
+		tablelib.LibLoader,
+		stringlib.LibLoader,
+		mathlib.LibLoader,
+		utf8lib.LibLoader,
+	)
+	t.Cleanup(func() {
+		cleanup()
+		r.Close(nil)
+	})
+	return r
+}
+
+func doLuaString(r *rt.Runtime, name, src string) error {
+	clos, err := r.CompileAndLoadLuaChunk(name, []byte(src), rt.TableValue(r.GlobalEnv()))
+	if err != nil {
+		return err
+	}
+	_, err = rt.Call1(r.MainThread(), rt.FunctionValue(clos))
+	return err
+}
+
+func preloadTable(t *testing.T, r *rt.Runtime) *rt.Table {
+	t.Helper()
+	pkg, ok := r.GlobalEnv().Get(rt.StringValue("package")).TryTable()
+	if !ok {
+		t.Fatalf("package table missing")
+	}
+	preload, ok := pkg.Get(rt.StringValue("preload")).TryTable()
+	if !ok {
+		t.Fatalf("package.preload table missing")
+	}
+	return preload
+}
 
 func TestStarterFSEmbed(t *testing.T) {
 	required := []string{
@@ -30,47 +79,47 @@ func TestStarterFSEmbed(t *testing.T) {
 }
 
 func TestStarterLuaCompileAndSmoke(t *testing.T) {
-	L := lua.NewState()
-	defer L.Close()
+	r := newTestLuaRuntime(t)
+	env := r.GlobalEnv()
 
 	// Seed Screeps global constants required by the bot modules.
-	constants := map[string]lua.LValue{
-		"OK":                      lua.LNumber(0),
-		"ERR_NOT_IN_RANGE":        lua.LNumber(-9),
-		"FIND_SOURCES":            lua.LNumber(105),
-		"FIND_MY_CREEPS":          lua.LNumber(102),
-		"FIND_HOSTILE_CREEPS":     lua.LNumber(103),
-		"FIND_STRUCTURES":         lua.LNumber(107),
-		"FIND_MY_STRUCTURES":      lua.LNumber(108),
-		"FIND_MY_SPAWNS":          lua.LNumber(112),
-		"FIND_CONSTRUCTION_SITES": lua.LNumber(111),
-		"FIND_DROPPED_RESOURCES":  lua.LNumber(106),
-		"FIND_TOMBSTONES":         lua.LNumber(118),
-		"STRUCTURE_SPAWN":         lua.LString("spawn"),
-		"STRUCTURE_EXTENSION":     lua.LString("extension"),
-		"STRUCTURE_ROAD":          lua.LString("road"),
-		"STRUCTURE_TOWER":         lua.LString("tower"),
-		"STRUCTURE_CONTAINER":     lua.LString("container"),
-		"STRUCTURE_CONTROLLER":    lua.LString("controller"),
-		"STRUCTURE_STORAGE":       lua.LString("storage"),
-		"STRUCTURE_LINK":          lua.LString("link"),
-		"STRUCTURE_RAMPART":       lua.LString("rampart"),
-		"STRUCTURE_WALL":          lua.LString("constructedWall"),
-		"RESOURCE_ENERGY":         lua.LString("energy"),
-		"WORK":                    lua.LString("work"),
-		"CARRY":                   lua.LString("carry"),
-		"MOVE":                    lua.LString("move"),
-		"ATTACK":                  lua.LString("attack"),
-		"RANGED_ATTACK":           lua.LString("ranged_attack"),
-		"HEAL":                    lua.LString("heal"),
-		"TOUGH":                   lua.LString("tough"),
-		"CLAIM":                   lua.LString("claim"),
+	constants := map[string]rt.Value{
+		"OK":                      rt.IntValue(0),
+		"ERR_NOT_IN_RANGE":        rt.IntValue(-9),
+		"FIND_SOURCES":            rt.IntValue(105),
+		"FIND_MY_CREEPS":          rt.IntValue(102),
+		"FIND_HOSTILE_CREEPS":     rt.IntValue(103),
+		"FIND_STRUCTURES":         rt.IntValue(107),
+		"FIND_MY_STRUCTURES":      rt.IntValue(108),
+		"FIND_MY_SPAWNS":          rt.IntValue(112),
+		"FIND_CONSTRUCTION_SITES": rt.IntValue(111),
+		"FIND_DROPPED_RESOURCES":  rt.IntValue(106),
+		"FIND_TOMBSTONES":         rt.IntValue(118),
+		"STRUCTURE_SPAWN":         rt.StringValue("spawn"),
+		"STRUCTURE_EXTENSION":     rt.StringValue("extension"),
+		"STRUCTURE_ROAD":          rt.StringValue("road"),
+		"STRUCTURE_TOWER":         rt.StringValue("tower"),
+		"STRUCTURE_CONTAINER":     rt.StringValue("container"),
+		"STRUCTURE_CONTROLLER":    rt.StringValue("controller"),
+		"STRUCTURE_STORAGE":       rt.StringValue("storage"),
+		"STRUCTURE_LINK":          rt.StringValue("link"),
+		"STRUCTURE_RAMPART":       rt.StringValue("rampart"),
+		"STRUCTURE_WALL":          rt.StringValue("constructedWall"),
+		"RESOURCE_ENERGY":         rt.StringValue("energy"),
+		"WORK":                    rt.StringValue("work"),
+		"CARRY":                   rt.StringValue("carry"),
+		"MOVE":                    rt.StringValue("move"),
+		"ATTACK":                  rt.StringValue("attack"),
+		"RANGED_ATTACK":           rt.StringValue("ranged_attack"),
+		"HEAL":                    rt.StringValue("heal"),
+		"TOUGH":                   rt.StringValue("tough"),
+		"CLAIM":                   rt.StringValue("claim"),
 	}
 	for k, v := range constants {
-		L.SetGlobal(k, v)
+		env.Set(rt.StringValue(k), v)
 	}
 
-	preload := L.GetField(L.GetField(L.Get(lua.EnvironIndex), "package"), "preload")
+	preload := preloadTable(t, r)
 	modules := []struct {
 		modName string
 		path    string
@@ -86,24 +135,24 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", mod.path, err)
 		}
-		fn, err := L.LoadString(string(src))
+		fn, err := r.CompileAndLoadLuaChunk(mod.path, src, rt.TableValue(env))
 		if err != nil {
-			t.Fatalf("compile %s in gopher-lua: %v", mod.path, err)
+			t.Fatalf("compile %s in golua: %v", mod.path, err)
 		}
-		L.SetField(preload, mod.modName, fn)
+		preload.Set(rt.StringValue(mod.modName), rt.FunctionValue(fn))
 	}
 
 	mainSrc, err := fs.ReadFile(StarterFS, "starter/main.lua")
 	if err != nil {
 		t.Fatalf("read main.lua: %v", err)
 	}
-	if err := L.DoString(string(mainSrc)); err != nil {
-		t.Fatalf("load main.lua in gopher-lua: %v", err)
+	if err := doLuaString(r, "starter/main.lua", string(mainSrc)); err != nil {
+		t.Fatalf("load main.lua in golua: %v", err)
 	}
 
-	loopFn := L.GetGlobal("loop")
-	if loopFn.Type() != lua.LTFunction {
-		t.Fatalf("expected global loop to be a function, got %s", loopFn.Type())
+	loopFn := env.Get(rt.StringValue("loop"))
+	if loopFn.Type() != rt.FunctionType {
+		t.Fatalf("expected global loop to be a function, got %s", loopFn.TypeName())
 	}
 
 	// Smoke-test loop() with a mocked room (RCL 5, planner tick, visuals, spawning, towers, links, creeps).
@@ -252,15 +301,11 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 			getObjectById = function(id) return byId[id] end,
 		}
 	`
-	if err := L.DoString(mockSetup); err != nil {
+	if err := doLuaString(r, "mockSetup", mockSetup); err != nil {
 		t.Fatalf("mock setup failed: %v", err)
 	}
 
-	if err := L.CallByParam(lua.P{
-		Fn:      loopFn,
-		NRet:    0,
-		Protect: true,
-	}); err != nil {
+	if _, err := rt.Call1(r.MainThread(), loopFn); err != nil {
 		t.Fatalf("loop() smoke tick failed: %v", err)
 	}
 
@@ -272,7 +317,7 @@ func TestStarterLuaCompileAndSmoke(t *testing.T) {
 		assert(Game.rooms.W1N1.sitesCreated > 0, "planner should place construction sites at RCL 5")
 		assert(Game.rooms.W1N1.visual.circles > 0, "visual overlays should be drawn")
 	`
-	if err := L.DoString(verify); err != nil {
+	if err := doLuaString(r, "verify", verify); err != nil {
 		t.Fatalf("post-tick assertions failed: %v", err)
 	}
 }
@@ -364,56 +409,56 @@ func TestRaiderRuns200TicksCleanly(t *testing.T) {
 }
 
 func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
-	L := lua.NewState()
-	defer L.Close()
+	r := newTestLuaRuntime(t)
+	env := r.GlobalEnv()
 
-	constants := map[string]lua.LValue{
-		"OK":                              lua.LNumber(0),
-		"ERR_NO_PATH":                     lua.LNumber(-2),
-		"ERR_NOT_IN_RANGE":                lua.LNumber(-9),
-		"FIND_EXIT_TOP":                   lua.LNumber(1),
-		"FIND_EXIT_RIGHT":                 lua.LNumber(3),
-		"FIND_EXIT_BOTTOM":                lua.LNumber(5),
-		"FIND_EXIT_LEFT":                  lua.LNumber(7),
-		"FIND_SOURCES":                    lua.LNumber(105),
-		"FIND_SOURCES_ACTIVE":             lua.LNumber(104),
-		"FIND_MY_CREEPS":                  lua.LNumber(102),
-		"FIND_HOSTILE_CREEPS":             lua.LNumber(103),
-		"FIND_STRUCTURES":                 lua.LNumber(107),
-		"FIND_MY_STRUCTURES":              lua.LNumber(108),
-		"FIND_HOSTILE_STRUCTURES":         lua.LNumber(109),
-		"FIND_MY_SPAWNS":                  lua.LNumber(112),
-		"FIND_HOSTILE_SPAWNS":             lua.LNumber(113),
-		"FIND_CONSTRUCTION_SITES":         lua.LNumber(111),
-		"FIND_MY_CONSTRUCTION_SITES":      lua.LNumber(114),
-		"FIND_HOSTILE_CONSTRUCTION_SITES": lua.LNumber(115),
-		"FIND_DROPPED_RESOURCES":          lua.LNumber(106),
-		"FIND_TOMBSTONES":                 lua.LNumber(118),
-		"TERRAIN_MASK_WALL":               lua.LNumber(1),
-		"STRUCTURE_SPAWN":                 lua.LString("spawn"),
-		"STRUCTURE_EXTENSION":             lua.LString("extension"),
-		"STRUCTURE_ROAD":                  lua.LString("road"),
-		"STRUCTURE_TOWER":                 lua.LString("tower"),
-		"STRUCTURE_CONTAINER":             lua.LString("container"),
-		"STRUCTURE_CONTROLLER":            lua.LString("controller"),
-		"STRUCTURE_STORAGE":               lua.LString("storage"),
-		"STRUCTURE_RAMPART":               lua.LString("rampart"),
-		"STRUCTURE_WALL":                  lua.LString("constructedWall"),
-		"RESOURCE_ENERGY":                 lua.LString("energy"),
-		"WORK":                            lua.LString("work"),
-		"CARRY":                           lua.LString("carry"),
-		"MOVE":                            lua.LString("move"),
-		"ATTACK":                          lua.LString("attack"),
-		"RANGED_ATTACK":                   lua.LString("ranged_attack"),
-		"HEAL":                            lua.LString("heal"),
-		"TOUGH":                           lua.LString("tough"),
-		"CLAIM":                           lua.LString("claim"),
+	constants := map[string]rt.Value{
+		"OK":                              rt.IntValue(0),
+		"ERR_NO_PATH":                     rt.IntValue(-2),
+		"ERR_NOT_IN_RANGE":                rt.IntValue(-9),
+		"FIND_EXIT_TOP":                   rt.IntValue(1),
+		"FIND_EXIT_RIGHT":                 rt.IntValue(3),
+		"FIND_EXIT_BOTTOM":                rt.IntValue(5),
+		"FIND_EXIT_LEFT":                  rt.IntValue(7),
+		"FIND_SOURCES":                    rt.IntValue(105),
+		"FIND_SOURCES_ACTIVE":             rt.IntValue(104),
+		"FIND_MY_CREEPS":                  rt.IntValue(102),
+		"FIND_HOSTILE_CREEPS":             rt.IntValue(103),
+		"FIND_STRUCTURES":                 rt.IntValue(107),
+		"FIND_MY_STRUCTURES":              rt.IntValue(108),
+		"FIND_HOSTILE_STRUCTURES":         rt.IntValue(109),
+		"FIND_MY_SPAWNS":                  rt.IntValue(112),
+		"FIND_HOSTILE_SPAWNS":             rt.IntValue(113),
+		"FIND_CONSTRUCTION_SITES":         rt.IntValue(111),
+		"FIND_MY_CONSTRUCTION_SITES":      rt.IntValue(114),
+		"FIND_HOSTILE_CONSTRUCTION_SITES": rt.IntValue(115),
+		"FIND_DROPPED_RESOURCES":          rt.IntValue(106),
+		"FIND_TOMBSTONES":                 rt.IntValue(118),
+		"TERRAIN_MASK_WALL":               rt.IntValue(1),
+		"STRUCTURE_SPAWN":                 rt.StringValue("spawn"),
+		"STRUCTURE_EXTENSION":             rt.StringValue("extension"),
+		"STRUCTURE_ROAD":                  rt.StringValue("road"),
+		"STRUCTURE_TOWER":                 rt.StringValue("tower"),
+		"STRUCTURE_CONTAINER":             rt.StringValue("container"),
+		"STRUCTURE_CONTROLLER":            rt.StringValue("controller"),
+		"STRUCTURE_STORAGE":               rt.StringValue("storage"),
+		"STRUCTURE_RAMPART":               rt.StringValue("rampart"),
+		"STRUCTURE_WALL":                  rt.StringValue("constructedWall"),
+		"RESOURCE_ENERGY":                 rt.StringValue("energy"),
+		"WORK":                            rt.StringValue("work"),
+		"CARRY":                           rt.StringValue("carry"),
+		"MOVE":                            rt.StringValue("move"),
+		"ATTACK":                          rt.StringValue("attack"),
+		"RANGED_ATTACK":                   rt.StringValue("ranged_attack"),
+		"HEAL":                            rt.StringValue("heal"),
+		"TOUGH":                           rt.StringValue("tough"),
+		"CLAIM":                           rt.StringValue("claim"),
 	}
 	for k, v := range constants {
-		L.SetGlobal(k, v)
+		env.Set(rt.StringValue(k), v)
 	}
 
-	preload := L.GetField(L.GetField(L.Get(lua.EnvironIndex), "package"), "preload")
+	preload := preloadTable(t, r)
 	for _, mod := range []struct{ name, path string }{
 		{"economy", "raider/economy.lua"},
 		{"planner", "raider/planner.lua"},
@@ -424,18 +469,18 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 		if err != nil {
 			t.Fatalf("read %s: %v", mod.path, err)
 		}
-		fn, err := L.LoadString(string(src))
+		fn, err := r.CompileAndLoadLuaChunk(mod.path, src, rt.TableValue(env))
 		if err != nil {
 			t.Fatalf("compile %s: %v", mod.path, err)
 		}
-		L.SetField(preload, mod.name, fn)
+		preload.Set(rt.StringValue(mod.name), rt.FunctionValue(fn))
 	}
 
 	mainSrc, err := fs.ReadFile(RaiderFS, "raider/main.lua")
 	if err != nil {
 		t.Fatalf("read raider/main.lua: %v", err)
 	}
-	if err := L.DoString(string(mainSrc)); err != nil {
+	if err := doLuaString(r, "raider/main.lua", string(mainSrc)); err != nil {
 		t.Fatalf("load raider/main.lua: %v", err)
 	}
 
@@ -577,7 +622,7 @@ func TestRaiderScoutingAndCombatSmoke(t *testing.T) {
 		assert(medic.healed > 0, "medic should heal wounded brawler")
 		assert(hurtBrawler.moved > 0, "low-HP brawler (<25%) should retreat toward medic")
 	`
-	if err := L.DoString(script); err != nil {
+	if err := doLuaString(r, "raiderSmoke", script); err != nil {
 		t.Fatalf("raider scouting & combat smoke failed: %v", err)
 	}
 }

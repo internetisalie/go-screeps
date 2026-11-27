@@ -1,8 +1,8 @@
 package lua
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
+	rt "github.com/arnodel/golua/runtime"
 )
 
 // LoadFS configures the VM to load scripts from an fs.FS (e.g. embed.FS) under subdir
@@ -90,85 +90,98 @@ func (vm *BotVM) loadMain() error {
 	if timeout < 2*time.Second {
 		timeout = 2 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	vm.L.SetContext(ctx)
-	defer vm.L.RemoveContext()
+	limitMs := uint64(timeout / time.Millisecond)
+	if limitMs == 0 {
+		limitMs = 2000
+	}
 
-	fn, err := vm.L.Load(bytes.NewReader(data), "main.lua")
+	clos, err := vm.R.CompileAndLoadLuaChunk("main.lua", data, rt.TableValue(vm.R.GlobalEnv()))
 	if err != nil {
 		return fmt.Errorf("compile main.lua: %w", err)
 	}
-	if err := vm.L.CallByParam(lua.P{Fn: fn, NRet: 0, Protect: true}); err != nil {
+
+	ctx, err := vm.R.MainThread().CallContext(rt.RuntimeContextDef{
+		HardLimits: rt.RuntimeResources{
+			Millis: limitMs,
+		},
+	}, func() error {
+		_, callErr := rt.Call1(vm.R.MainThread(), rt.FunctionValue(clos))
+		return callErr
+	})
+	if err != nil {
+		var termErr rt.ContextTerminationError
+		if (ctx != nil && ctx.Status() == rt.StatusKilled) || errors.As(err, &termErr) {
+			err = fmt.Errorf("%w: %v", context.DeadlineExceeded, err)
+		}
 		return fmt.Errorf("execute main.lua: %w", err)
 	}
 	return nil
 }
 
 func (vm *BotVM) clearUserModules() {
-	if vm.L == nil {
+	if vm.R == nil {
 		return
 	}
-	pkg, ok := vm.L.GetGlobal("package").(*lua.LTable)
-	if ok {
-		if loaded, ok := pkg.RawGetString("loaded").(*lua.LTable); ok {
+	if pkg, ok := vm.R.GlobalEnv().Get(rt.StringValue("package")).TryTable(); ok {
+		if loaded, ok := pkg.Get(rt.StringValue("loaded")).TryTable(); ok {
 			for modName := range vm.loadedModules {
-				loaded.RawSetString(modName, lua.LNil)
+				loaded.Set(rt.StringValue(modName), rt.NilValue)
 			}
 		}
 	}
 	vm.loadedModules = make(map[string]bool)
 }
 
-func (vm *BotVM) luaRequire(L *lua.LState) int {
-	modName := L.CheckString(1)
+func (vm *BotVM) luaRequire(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	if err := c.Check1Arg(); err != nil {
+		return nil, err
+	}
+	modName, err := c.StringArg(0)
+	if err != nil {
+		return nil, err
+	}
 
-	pkg, _ := L.GetGlobal("package").(*lua.LTable)
-	var loaded *lua.LTable
-	if pkg != nil {
-		loaded, _ = pkg.RawGetString("loaded").(*lua.LTable)
+	var loaded *rt.Table
+	if pkg, ok := vm.R.GlobalEnv().Get(rt.StringValue("package")).TryTable(); ok {
+		loaded, _ = pkg.Get(rt.StringValue("loaded")).TryTable()
 	}
 
 	// Return cached module if already loaded.
 	if loaded != nil {
-		if existing := loaded.RawGetString(modName); existing != lua.LNil && existing != lua.LFalse {
-			L.Push(existing)
-			return 1
+		existing := loaded.Get(rt.StringValue(modName))
+		if rt.Truth(existing) {
+			return c.PushingNext1(t.Runtime, existing), nil
 		}
 	}
 
 	relPath, err := sanitizeModulePath(modName)
 	if err != nil {
-		L.RaiseError("require(%q): %s", modName, err.Error())
-		return 0
+		return nil, fmt.Errorf("require(%q): %s", modName, err.Error())
 	}
 
 	data, err := vm.readBotFile(relPath)
 	if err != nil {
-		L.RaiseError("require(%q): %s", modName, err.Error())
-		return 0
+		return nil, fmt.Errorf("require(%q): %s", modName, err.Error())
 	}
 
-	fn, err := L.Load(bytes.NewReader(data), relPath)
+	clos, err := vm.R.CompileAndLoadLuaChunk(relPath, data, rt.TableValue(vm.R.GlobalEnv()))
 	if err != nil {
-		L.RaiseError("require(%q): %s", modName, err.Error())
-		return 0
+		return nil, fmt.Errorf("require(%q): %s", modName, err.Error())
 	}
 
-	L.Push(fn)
-	L.Call(0, 1)
-	res := L.Get(-1)
-	if res == lua.LNil {
-		res = lua.LTrue
-		L.Pop(1)
-		L.Push(res)
+	res, err := rt.Call1(t, rt.FunctionValue(clos))
+	if err != nil {
+		return nil, err
+	}
+	if res.IsNil() {
+		res = rt.BoolValue(true)
 	}
 
 	if loaded != nil {
-		loaded.RawSetString(modName, res)
+		loaded.Set(rt.StringValue(modName), res)
 	}
 	vm.loadedModules[modName] = true
-	return 1
+	return c.PushingNext1(t.Runtime, res), nil
 }
 
 // sanitizeModulePath converts a Lua module name (e.g. "roles" or "lib.utils") into a safe

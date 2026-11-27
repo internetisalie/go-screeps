@@ -158,7 +158,7 @@ end
 	}
 
 	// Verify Memory.ticks == 15 and Memory.creeps.worker1.count > 10.
-	if err := vm.L.DoString(`
+	if err := vm.DoString(`
 		assert(Memory.ticks == 15, "ticks=" .. tostring(Memory.ticks))
 		assert(Memory.creeps.worker1 ~= nil, "worker1 memory missing")
 		assert(Memory.creeps.worker1.role == "harvester", "role mismatch")

@@ -1,20 +1,133 @@
 package lua
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
 	"time"
 
-	lua "github.com/yuin/gopher-lua"
+	rt "github.com/arnodel/golua/runtime"
 
 	"go-screeps/internal/engine"
 	"go-screeps/internal/screeps"
 )
 
-const costMatrixTypeName = "PathFinder.CostMatrix"
+// --- Table & argument helpers ---
 
-// initAPI injects all Screeps constants, reusable metatables, and PathFinder into vm.L.
+func tblGet(t *rt.Table, key string) rt.Value {
+	return t.Get(rt.StringValue(key))
+}
+
+func tblSet(t *rt.Table, key string, val rt.Value) {
+	t.Set(rt.StringValue(key), val)
+}
+
+func tblGetInt(t *rt.Table, idx int) rt.Value {
+	return t.Get(rt.IntValue(int64(idx)))
+}
+
+func tblSetInt(t *rt.Table, idx int, val rt.Value) {
+	t.Set(rt.IntValue(int64(idx)), val)
+}
+
+func argAt(c *rt.GoCont, n int) rt.Value {
+	if n < 0 || n >= c.NArgs() {
+		return rt.NilValue
+	}
+	return c.Arg(n)
+}
+
+func isNumber(v rt.Value) bool {
+	tp := v.Type()
+	return tp == rt.IntType || tp == rt.FloatType
+}
+
+func asInt(v rt.Value) (int, bool) {
+	switch v.Type() {
+	case rt.IntType:
+		return int(v.AsInt()), true
+	case rt.FloatType:
+		return int(v.AsFloat()), true
+	default:
+		return 0, false
+	}
+}
+
+func asFloat(v rt.Value) (float64, bool) {
+	switch v.Type() {
+	case rt.IntType:
+		return float64(v.AsInt()), true
+	case rt.FloatType:
+		return v.AsFloat(), true
+	default:
+		return 0, false
+	}
+}
+
+func checkInt(c *rt.GoCont, n int) (int, error) {
+	v := argAt(c, n)
+	if f, ok := rt.ToFloat(v); ok {
+		return int(f), nil
+	}
+	return 0, fmt.Errorf("bad argument #%d (number expected, got %s)", n+1, v.TypeName())
+}
+
+func checkFloat(c *rt.GoCont, n int) (float64, error) {
+	v := argAt(c, n)
+	if f, ok := rt.ToFloat(v); ok {
+		return f, nil
+	}
+	return 0, fmt.Errorf("bad argument #%d (number expected, got %s)", n+1, v.TypeName())
+}
+
+func checkString(c *rt.GoCont, n int) (string, error) {
+	v := argAt(c, n)
+	if s, ok := v.TryString(); ok {
+		return s, nil
+	}
+	return "", fmt.Errorf("bad argument #%d (string expected, got %s)", n+1, v.TypeName())
+}
+
+func checkTable(c *rt.GoCont, n int) (*rt.Table, error) {
+	v := argAt(c, n)
+	if t, ok := v.TryTable(); ok {
+		return t, nil
+	}
+	return nil, fmt.Errorf("bad argument #%d (table expected, got %s)", n+1, v.TypeName())
+}
+
+func checkUserData(c *rt.GoCont, n int) (*rt.UserData, error) {
+	v := argAt(c, n)
+	if ud, ok := v.TryUserData(); ok {
+		return ud, nil
+	}
+	return nil, fmt.Errorf("bad argument #%d (userdata expected, got %s)", n+1, v.TypeName())
+}
+
+func optString(c *rt.GoCont, n int, def string) string {
+	v := argAt(c, n)
+	if v.IsNil() {
+		return def
+	}
+	if s, ok := v.TryString(); ok {
+		return s
+	}
+	return def
+}
+
+func optInt(c *rt.GoCont, n int, def int) int {
+	v := argAt(c, n)
+	if v.IsNil() {
+		return def
+	}
+	if f, ok := rt.ToFloat(v); ok {
+		return int(f)
+	}
+	return def
+}
+
+// initAPI injects all Screeps constants, reusable metatables, and PathFinder into vm.R.
 func (vm *BotVM) initAPI() {
 	vm.injectConstants()
 	vm.initMetatables()
@@ -22,7 +135,7 @@ func (vm *BotVM) initAPI() {
 }
 
 func (vm *BotVM) injectConstants() {
-	L := vm.L
+	env := vm.R.GlobalEnv()
 
 	intConsts := map[string]int{
 		// Return / error codes
@@ -105,7 +218,7 @@ func (vm *BotVM) injectConstants() {
 		"TOWER_CAPACITY":           engine.TOWER_CAPACITY,
 	}
 	for k, v := range intConsts {
-		L.SetGlobal(k, lua.LNumber(v))
+		tblSet(env, k, rt.IntValue(int64(v)))
 	}
 
 	strConsts := map[string]string{
@@ -155,151 +268,155 @@ func (vm *BotVM) injectConstants() {
 		"LOOK_TOMBSTONES":         "tombstone",
 	}
 	for k, v := range strConsts {
-		L.SetGlobal(k, lua.LString(v))
+		tblSet(env, k, rt.StringValue(v))
 	}
 
 	// BODYPART_COST table
-	bpCost := L.NewTable()
+	bpCost := rt.NewTable()
 	for part, cost := range engine.BODYPART_COST {
-		bpCost.RawSetString(part, lua.LNumber(cost))
+		tblSet(bpCost, part, rt.IntValue(int64(cost)))
 	}
-	L.SetGlobal("BODYPART_COST", bpCost)
+	tblSet(env, "BODYPART_COST", rt.TableValue(bpCost))
 
 	// RoomPosition constructor global
-	L.SetGlobal("RoomPosition", L.NewFunction(func(L *lua.LState) int {
-		x := L.CheckInt(1)
-		y := L.CheckInt(2)
-		roomName := L.CheckString(3)
-		L.Push(vm.newRoomPosition(x, y, roomName))
-		return 1
-	}))
+	tblSet(env, "RoomPosition", rt.FunctionValue(vm.newGoFunc("RoomPosition", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		x, err := checkInt(c, 0)
+		if err != nil {
+			return nil, err
+		}
+		y, err := checkInt(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		roomName, err := checkString(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		return c.PushingNext1(t.Runtime, rt.TableValue(vm.newRoomPosition(x, y, roomName))), nil
+	}, 3, false)))
+}
+
+type methodSpec struct {
+	fn    rt.GoFunctionFunc
+	nArgs int
 }
 
 func (vm *BotVM) initMetatables() {
-	L := vm.L
-
-	makeMT := func(methods map[string]lua.LGFunction) *lua.LTable {
-		mt := L.NewTable()
-		idx := L.NewTable()
-		for name, fn := range methods {
-			idx.RawSetString(name, L.NewFunction(fn))
+	makeMT := func(methods map[string]methodSpec) *rt.Table {
+		mt := rt.NewTable()
+		idx := rt.NewTable()
+		for name, spec := range methods {
+			tblSet(idx, name, rt.FunctionValue(vm.newGoFunc(name, spec.fn, spec.nArgs, false)))
 		}
-		mt.RawSetString("__index", idx)
+		tblSet(mt, "__index", rt.TableValue(idx))
 		return mt
 	}
 
-	vm.roomPosMT = makeMT(map[string]lua.LGFunction{
-		"getRangeTo":         vm.posGetRangeTo,
-		"isNearTo":           vm.posIsNearTo,
-		"inRangeTo":          vm.posInRangeTo,
-		"isEqualTo":          vm.posIsEqualTo,
-		"findClosestByRange": vm.posFindClosestByRange,
+	vm.roomPosMT = makeMT(map[string]methodSpec{
+		"getRangeTo":         {vm.posGetRangeTo, 3},
+		"isNearTo":           {vm.posIsNearTo, 3},
+		"inRangeTo":          {vm.posInRangeTo, 4},
+		"isEqualTo":          {vm.posIsEqualTo, 3},
+		"findClosestByRange": {vm.posFindClosestByRange, 2},
 	})
 
-	vm.terrainMT = makeMT(map[string]lua.LGFunction{
-		"get": vm.terrainGet,
+	vm.terrainMT = makeMT(map[string]methodSpec{
+		"get": {vm.terrainGet, 3},
 	})
 
-	vm.visualMT = makeMT(map[string]lua.LGFunction{
-		"circle": vm.visualCircle,
-		"line":   vm.visualLine,
-		"rect":   vm.visualRect,
-		"poly":   vm.visualPoly,
-		"text":   vm.visualText,
+	vm.visualMT = makeMT(map[string]methodSpec{
+		"circle": {vm.visualCircle, 4},
+		"line":   {vm.visualLine, 6},
+		"rect":   {vm.visualRect, 6},
+		"poly":   {vm.visualPoly, 3},
+		"text":   {vm.visualText, 5},
 	})
 
-	vm.storeMT = makeMT(map[string]lua.LGFunction{
-		"getUsedCapacity": vm.storeGetUsedCapacity,
-		"getFreeCapacity": vm.storeGetFreeCapacity,
-		"getCapacity":     vm.storeGetCapacity,
+	vm.storeMT = makeMT(map[string]methodSpec{
+		"getUsedCapacity": {vm.storeGetUsedCapacity, 2},
+		"getFreeCapacity": {vm.storeGetFreeCapacity, 2},
+		"getCapacity":     {vm.storeGetCapacity, 2},
 	})
 
-	vm.roomMT = makeMT(map[string]lua.LGFunction{
-		"find":                   vm.roomFind,
-		"createConstructionSite": vm.roomCreateConstructionSite,
-		"getTerrain":             vm.roomGetTerrain,
-		"lookForAt":              vm.roomLookForAt,
-		"findExitTo":             vm.roomFindExitTo,
+	vm.roomMT = makeMT(map[string]methodSpec{
+		"find":                   {vm.roomFind, 3},
+		"createConstructionSite": {vm.roomCreateConstructionSite, 4},
+		"getTerrain":             {vm.roomGetTerrain, 1},
+		"lookForAt":              {vm.roomLookForAt, 4},
+		"findExitTo":             {vm.roomFindExitTo, 2},
 	})
 
-	vm.creepMT = makeMT(map[string]lua.LGFunction{
-		"move":              vm.creepMove,
-		"moveTo":            vm.creepMoveTo,
-		"harvest":           vm.creepTargetIntent(engine.IntentHarvest),
-		"transfer":          vm.creepTransfer,
-		"withdraw":          vm.creepWithdraw,
-		"pickup":            vm.creepTargetIntent(engine.IntentPickup),
-		"drop":              vm.creepDrop,
-		"build":             vm.creepTargetIntent(engine.IntentBuild),
-		"repair":            vm.creepTargetIntent(engine.IntentRepair),
-		"upgradeController": vm.creepTargetIntent(engine.IntentUpgradeController),
-		"attack":            vm.creepTargetIntent(engine.IntentAttack),
-		"rangedAttack":      vm.creepTargetIntent(engine.IntentRangedAttack),
-		"heal":              vm.creepTargetIntent(engine.IntentHeal),
-		"rangedHeal":        vm.creepTargetIntent(engine.IntentRangedHeal),
-		"dismantle":         vm.creepTargetIntent(engine.IntentDismantle),
-		"say":               vm.creepSay,
+	vm.creepMT = makeMT(map[string]methodSpec{
+		"move":              {vm.creepMove, 2},
+		"moveTo":            {vm.creepMoveTo, 4},
+		"harvest":           {vm.creepTargetIntent(engine.IntentHarvest), 2},
+		"transfer":          {vm.creepTransfer, 4},
+		"withdraw":          {vm.creepWithdraw, 4},
+		"pickup":            {vm.creepTargetIntent(engine.IntentPickup), 2},
+		"drop":              {vm.creepDrop, 3},
+		"build":             {vm.creepTargetIntent(engine.IntentBuild), 2},
+		"repair":            {vm.creepTargetIntent(engine.IntentRepair), 2},
+		"upgradeController": {vm.creepTargetIntent(engine.IntentUpgradeController), 2},
+		"attack":            {vm.creepTargetIntent(engine.IntentAttack), 2},
+		"rangedAttack":      {vm.creepTargetIntent(engine.IntentRangedAttack), 2},
+		"heal":              {vm.creepTargetIntent(engine.IntentHeal), 2},
+		"rangedHeal":        {vm.creepTargetIntent(engine.IntentRangedHeal), 2},
+		"dismantle":         {vm.creepTargetIntent(engine.IntentDismantle), 2},
+		"say":               {vm.creepSay, 2},
 	})
 
-	vm.spawnMT = makeMT(map[string]lua.LGFunction{
-		"spawnCreep": vm.spawnCreep,
+	vm.spawnMT = makeMT(map[string]methodSpec{
+		"spawnCreep": {vm.spawnCreep, 4},
 	})
 
-	vm.towerMT = makeMT(map[string]lua.LGFunction{
-		"attack": vm.structureTargetIntent(engine.IntentTowerAttack),
-		"heal":   vm.structureTargetIntent(engine.IntentTowerHeal),
-		"repair": vm.structureTargetIntent(engine.IntentTowerRepair),
+	vm.towerMT = makeMT(map[string]methodSpec{
+		"attack": {vm.structureTargetIntent(engine.IntentTowerAttack), 2},
+		"heal":   {vm.structureTargetIntent(engine.IntentTowerHeal), 2},
+		"repair": {vm.structureTargetIntent(engine.IntentTowerRepair), 2},
 	})
 
-	vm.linkMT = makeMT(map[string]lua.LGFunction{
-		"transferEnergy": vm.linkTransferEnergy,
+	vm.linkMT = makeMT(map[string]methodSpec{
+		"transferEnergy": {vm.linkTransferEnergy, 3},
 	})
 
 	// CostMatrix userdata metatable
-	cmMT := L.NewTypeMetatable(costMatrixTypeName)
-	cmIdx := L.NewTable()
-	cmIdx.RawSetString("set", L.NewFunction(vm.costMatrixSet))
-	cmIdx.RawSetString("get", L.NewFunction(vm.costMatrixGet))
-	cmIdx.RawSetString("clone", L.NewFunction(vm.costMatrixClone))
-	cmMT.RawSetString("__index", cmIdx)
-	vm.costMatMT = cmMT
+	vm.costMatMT = makeMT(map[string]methodSpec{
+		"set":   {vm.costMatrixSet, 4},
+		"get":   {vm.costMatrixGet, 3},
+		"clone": {vm.costMatrixClone, 1},
+	})
 }
 
 func (vm *BotVM) injectPathFinder() {
-	L := vm.L
-	pf := L.NewTable()
+	pf := rt.NewTable()
 
-	newCM := func(L *lua.LState) int {
-		ud := L.NewUserData()
-		ud.Value = engine.NewCostMatrix()
-		L.SetMetatable(ud, vm.costMatMT)
-		L.Push(ud)
-		return 1
-	}
+	newCM := vm.newGoFunc("PathFinder.CostMatrix", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		ud := rt.NewUserData(engine.NewCostMatrix(), vm.costMatMT)
+		return c.PushingNext1(t.Runtime, rt.UserDataValue(ud)), nil
+	}, 1, false)
 
-	cmCtor := L.NewTable()
-	cmCtor.RawSetString("new", L.NewFunction(newCM))
-	cmCtorMT := L.NewTable()
-	cmCtorMT.RawSetString("__call", L.NewFunction(newCM))
-	L.SetMetatable(cmCtor, cmCtorMT)
+	cmCtor := rt.NewTable()
+	tblSet(cmCtor, "new", rt.FunctionValue(newCM))
+	cmCtorMT := rt.NewTable()
+	tblSet(cmCtorMT, "__call", rt.FunctionValue(newCM))
+	cmCtor.SetMetatable(cmCtorMT)
 
-	pf.RawSetString("CostMatrix", cmCtor)
-	pf.RawSetString("search", L.NewFunction(vm.pathFinderSearch))
-	L.SetGlobal("PathFinder", pf)
+	tblSet(pf, "CostMatrix", rt.TableValue(cmCtor))
+	tblSet(pf, "search", rt.FunctionValue(vm.newGoFunc("PathFinder.search", vm.pathFinderSearch, 3, false)))
+	tblSet(vm.R.GlobalEnv(), "PathFinder", rt.TableValue(pf))
 }
 
 // refreshGame rebuilds the global Game table from world for this VM's UserID.
 func (vm *BotVM) refreshGame(world *engine.World) {
-	L := vm.L
-	vm.objCache = make(map[string]*lua.LTable)
-	vm.roomCache = make(map[string]*lua.LTable)
+	vm.objCache = make(map[string]*rt.Table)
+	vm.roomCache = make(map[string]*rt.Table)
 
-	game := L.NewTable()
-	roomsTbl := L.NewTable()
-	creepsTbl := L.NewTable()
-	spawnsTbl := L.NewTable()
-	structsTbl := L.NewTable()
-	sitesTbl := L.NewTable()
+	game := rt.NewTable()
+	roomsTbl := rt.NewTable()
+	creepsTbl := rt.NewTable()
+	spawnsTbl := rt.NewTable()
+	structsTbl := rt.NewTable()
+	sitesTbl := rt.NewTable()
 
 	world.RLock()
 	gameTime := world.GameTime
@@ -350,12 +467,12 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 	}
 	world.RUnlock()
 
-	game.RawSetString("time", lua.LNumber(gameTime))
+	tblSet(game, "time", rt.IntValue(gameTime))
 
 	for _, rName := range visibleRooms {
 		rTbl := vm.wrapRoomByName(rName)
 		if rTbl != nil {
-			roomsTbl.RawSetString(rName, rTbl)
+			tblSet(roomsTbl, rName, rt.TableValue(rTbl))
 		}
 	}
 
@@ -364,74 +481,69 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 		if obj == nil {
 			continue
 		}
+		objVal := rt.TableValue(obj)
 		switch {
 		case es.typ == engine.TYPE_CREEP:
 			if es.name != "" {
-				creepsTbl.RawSetString(es.name, obj)
+				tblSet(creepsTbl, es.name, objVal)
 			}
 		case es.typ == engine.STRUCTURE_SPAWN:
 			if es.name != "" {
-				spawnsTbl.RawSetString(es.name, obj)
+				tblSet(spawnsTbl, es.name, objVal)
 			}
-			structsTbl.RawSetString(es.id, obj)
+			tblSet(structsTbl, es.id, objVal)
 		case es.typ == engine.TYPE_CONSTRUCTION_SITE:
-			sitesTbl.RawSetString(es.id, obj)
+			tblSet(sitesTbl, es.id, objVal)
 		case es.isStruct:
-			structsTbl.RawSetString(es.id, obj)
+			tblSet(structsTbl, es.id, objVal)
 		}
 	}
 
-	game.RawSetString("rooms", roomsTbl)
-	game.RawSetString("creeps", creepsTbl)
-	game.RawSetString("spawns", spawnsTbl)
-	game.RawSetString("structures", structsTbl)
-	game.RawSetString("constructionSites", sitesTbl)
+	tblSet(game, "rooms", rt.TableValue(roomsTbl))
+	tblSet(game, "creeps", rt.TableValue(creepsTbl))
+	tblSet(game, "spawns", rt.TableValue(spawnsTbl))
+	tblSet(game, "structures", rt.TableValue(structsTbl))
+	tblSet(game, "constructionSites", rt.TableValue(sitesTbl))
 
-	game.RawSetString("getObjectById", L.NewFunction(func(L *lua.LState) int {
-		id := L.OptString(1, "")
+	tblSet(game, "getObjectById", rt.FunctionValue(vm.newGoFunc("Game.getObjectById", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		id := optString(c, 0, "")
 		if id == "" {
-			L.Push(lua.LNil)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.NilValue), nil
 		}
 		obj := vm.wrapEntityByID(id)
 		if obj == nil {
-			L.Push(lua.LNil)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.NilValue), nil
 		}
-		L.Push(obj)
-		return 1
-	}))
+		return c.PushingNext1(t.Runtime, rt.TableValue(obj)), nil
+	}, 1, false)))
 
-	cpuTbl := L.NewTable()
+	cpuTbl := rt.NewTable()
 	limitMs := float64(vm.CPULimit) / float64(time.Millisecond)
 	if limitMs <= 0 {
 		limitMs = float64(defaultCPULimit) / float64(time.Millisecond)
 	}
-	cpuTbl.RawSetString("limit", lua.LNumber(limitMs))
-	cpuTbl.RawSetString("tickLimit", lua.LNumber(limitMs))
-	cpuTbl.RawSetString("bucket", lua.LNumber(10000))
-	cpuTbl.RawSetString("getUsed", L.NewFunction(func(L *lua.LState) int {
+	tblSet(cpuTbl, "limit", rt.FloatValue(limitMs))
+	tblSet(cpuTbl, "tickLimit", rt.FloatValue(limitMs))
+	tblSet(cpuTbl, "bucket", rt.IntValue(10000))
+	tblSet(cpuTbl, "getUsed", rt.FunctionValue(vm.newGoFunc("Game.cpu.getUsed", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		usedMs := float64(time.Since(vm.tickStart)) / float64(time.Millisecond)
-		L.Push(lua.LNumber(usedMs))
-		return 1
-	}))
-	game.RawSetString("cpu", cpuTbl)
+		return c.PushingNext1(t.Runtime, rt.FloatValue(usedMs)), nil
+	}, 0, false)))
+	tblSet(game, "cpu", rt.TableValue(cpuTbl))
 
-	mapTbl := L.NewTable()
-	mapTbl.RawSetString("describeExits", L.NewFunction(func(L *lua.LState) int {
-		rName := strings.ToUpper(strings.TrimSpace(L.OptString(1, "")))
+	mapTbl := rt.NewTable()
+	tblSet(mapTbl, "describeExits", rt.FunctionValue(vm.newGoFunc("Game.map.describeExits", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		rName := strings.ToUpper(strings.TrimSpace(optString(c, 0, "")))
 		if rName == "" || vm.world == nil {
-			L.Push(lua.LNil)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.NilValue), nil
 		}
 		vm.world.RLock()
 		defer vm.world.RUnlock()
 		r := vm.world.Rooms[rName]
 		if r == nil {
-			L.Push(lua.LNil)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.NilValue), nil
 		}
-		exits := L.NewTable()
+		exits := rt.NewTable()
 		dirs := []struct {
 			key   string
 			exitC int
@@ -452,76 +564,72 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 				continue
 			}
 			if vm.world.Rooms[adj] != nil {
-				exits.RawSetString(d.key, lua.LString(adj))
+				tblSet(exits, d.key, rt.StringValue(adj))
 			}
 		}
-		L.Push(exits)
-		return 1
-	}))
-	game.RawSetString("map", mapTbl)
+		return c.PushingNext1(t.Runtime, rt.TableValue(exits)), nil
+	}, 1, false)))
+	tblSet(game, "map", rt.TableValue(mapTbl))
 
-	L.SetGlobal("Game", game)
+	tblSet(vm.R.GlobalEnv(), "Game", rt.TableValue(game))
 }
 
 // --- Memory helpers ---
 
-func (vm *BotVM) ensureMemorySubtable(key string) *lua.LTable {
-	L := vm.L
-	mem, ok := L.GetGlobal("Memory").(*lua.LTable)
+func (vm *BotVM) ensureMemorySubtable(key string) *rt.Table {
+	env := vm.R.GlobalEnv()
+	mem, ok := tblGet(env, "Memory").TryTable()
 	if !ok {
-		mem = L.NewTable()
-		L.SetGlobal("Memory", mem)
+		mem = rt.NewTable()
+		tblSet(env, "Memory", rt.TableValue(mem))
 	}
-	sub, ok := mem.RawGetString(key).(*lua.LTable)
+	sub, ok := tblGet(mem, key).TryTable()
 	if !ok {
-		sub = L.NewTable()
-		mem.RawSetString(key, sub)
+		sub = rt.NewTable()
+		tblSet(mem, key, rt.TableValue(sub))
 	}
 	return sub
 }
 
-func (vm *BotVM) getOrCreateCreepMemory(name string) *lua.LTable {
+func (vm *BotVM) getOrCreateCreepMemory(name string) *rt.Table {
 	creepsMem := vm.ensureMemorySubtable("creeps")
-	cm, ok := creepsMem.RawGetString(name).(*lua.LTable)
+	cm, ok := tblGet(creepsMem, name).TryTable()
 	if !ok {
-		cm = vm.L.NewTable()
-		creepsMem.RawSetString(name, cm)
+		cm = rt.NewTable()
+		tblSet(creepsMem, name, rt.TableValue(cm))
 	}
 	return cm
 }
 
-func (vm *BotVM) getOrCreateRoomMemory(roomName string) *lua.LTable {
+func (vm *BotVM) getOrCreateRoomMemory(roomName string) *rt.Table {
 	roomsMem := vm.ensureMemorySubtable("rooms")
-	rm, ok := roomsMem.RawGetString(roomName).(*lua.LTable)
+	rm, ok := tblGet(roomsMem, roomName).TryTable()
 	if !ok {
-		rm = vm.L.NewTable()
-		roomsMem.RawSetString(roomName, rm)
+		rm = rt.NewTable()
+		tblSet(roomsMem, roomName, rt.TableValue(rm))
 	}
 	return rm
 }
 
 // --- Object wrapping ---
 
-func (vm *BotVM) newRoomPosition(x, y int, roomName string) *lua.LTable {
-	L := vm.L
-	t := L.NewTable()
-	t.RawSetString("x", lua.LNumber(x))
-	t.RawSetString("y", lua.LNumber(y))
-	t.RawSetString("roomName", lua.LString(roomName))
-	L.SetMetatable(t, vm.roomPosMT)
+func (vm *BotVM) newRoomPosition(x, y int, roomName string) *rt.Table {
+	t := rt.NewTable()
+	tblSet(t, "x", rt.IntValue(int64(x)))
+	tblSet(t, "y", rt.IntValue(int64(y)))
+	tblSet(t, "roomName", rt.StringValue(roomName))
+	t.SetMetatable(vm.roomPosMT)
 	return t
 }
 
-func (vm *BotVM) newRoomVisual(roomName string) *lua.LTable {
-	L := vm.L
-	t := L.NewTable()
-	t.RawSetString("roomName", lua.LString(roomName))
-	L.SetMetatable(t, vm.visualMT)
+func (vm *BotVM) newRoomVisual(roomName string) *rt.Table {
+	t := rt.NewTable()
+	tblSet(t, "roomName", rt.StringValue(roomName))
+	t.SetMetatable(vm.visualMT)
 	return t
 }
 
-func (vm *BotVM) newRoomTerrain(roomName string) lua.LValue {
-	L := vm.L
+func (vm *BotVM) newRoomTerrain(roomName string) rt.Value {
 	var grid *[engine.RoomSize * engine.RoomSize]uint8
 	if vm.world != nil {
 		vm.world.RLock()
@@ -531,43 +639,25 @@ func (vm *BotVM) newRoomTerrain(roomName string) lua.LValue {
 		}
 		vm.world.RUnlock()
 	}
-	ud := L.NewUserData()
-	ud.Value = grid
-	L.SetMetatable(ud, vm.terrainMT)
-	return ud
+	return rt.UserDataValue(rt.NewUserData(grid, vm.terrainMT))
 }
 
-func (vm *BotVM) newStore(e *engine.Entity) *lua.LTable {
-	L := vm.L
-	t := L.NewTable()
+func (vm *BotVM) newStore(e *engine.Entity) *rt.Table {
+	t := rt.NewTable()
 	if e.Capacity(engine.RESOURCE_ENERGY) > 0 {
-		t.RawSetString(engine.RESOURCE_ENERGY, lua.LNumber(e.UsedCapacity(engine.RESOURCE_ENERGY)))
+		tblSet(t, engine.RESOURCE_ENERGY, rt.IntValue(int64(e.UsedCapacity(engine.RESOURCE_ENERGY))))
 	}
 	for res, amt := range e.Store {
-		t.RawSetString(res, lua.LNumber(amt))
+		tblSet(t, res, rt.IntValue(int64(amt)))
 	}
-	// Attach entity ID in a private closure? Better: use a small metatable wrapper?
-	// We use a per-store metatable? No, storeMT is shared; store entity ID on a closure?
-	// Even simpler: store the entity ID in a weak-free Go map or inside a per-store metatable?
-	// Wait: keeping `storeMT` shared with a `storeIDs` map on vm is O(1) and keeps pairs(store) clean!
-	// Actually, we can store `_entityId` in a Go map keyed by *lua.LTable, or just set a metatable
-	// whose __index looks up vm.storeMT methods. Let's check: vm.objCache is cleared each tick,
-	// so let's add a storeRef or use closure-free lookup. We already have `storeMT`; let's keep a
-	// map? Wait: let's check if we declared storeEntity on BotVM. We didn't yet, OR we can just
-	// use a metatable per store? No, a metatable with __index pointing to a 3-function table is tiny,
-	// OR even better: we can store the entity ID on a `mt`? Wait - creating a closure per store is
-	// heavier than a Go map, so let's check: can we store `__entityId` in `mt`? Yes!
-	// If `mt := L.NewTable(); mt.RawSetString("__index", storeMethods); mt.RawSetString("__id", lua.LString(e.ID))`,
-	// then `pairs(store)` ONLY sees resource keys, `L.GetMetatable(self).RawGetString("__id")` returns the ID,
-	// and we don't even need a map! That's idiomatic Lua 5.1.
-	mt := L.NewTable()
-	mt.RawSetString("__index", vm.storeMT.RawGetString("__index"))
-	mt.RawSetString("__id", lua.LString(e.ID))
-	L.SetMetatable(t, mt)
+	mt := rt.NewTable()
+	tblSet(mt, "__index", tblGet(vm.storeMT, "__index"))
+	tblSet(mt, "__id", rt.StringValue(e.ID))
+	t.SetMetatable(mt)
 	return t
 }
 
-func (vm *BotVM) wrapRoomByName(roomName string) *lua.LTable {
+func (vm *BotVM) wrapRoomByName(roomName string) *rt.Table {
 	roomName = strings.ToUpper(strings.TrimSpace(roomName))
 	if cached, ok := vm.roomCache[roomName]; ok {
 		return cached
@@ -590,26 +680,25 @@ func (vm *BotVM) wrapRoomByName(roomName string) *lua.LTable {
 	}
 	vm.world.RUnlock()
 
-	L := vm.L
-	t := L.NewTable()
+	t := rt.NewTable()
 	// Cache immediately to break room <-> controller reference cycles.
 	vm.roomCache[roomName] = t
 
-	t.RawSetString("name", lua.LString(roomName))
-	t.RawSetString("energyAvailable", lua.LNumber(energyAvail))
-	t.RawSetString("energyCapacityAvailable", lua.LNumber(energyCap))
-	t.RawSetString("visual", vm.newRoomVisual(roomName))
-	t.RawSetString("memory", vm.getOrCreateRoomMemory(roomName))
+	tblSet(t, "name", rt.StringValue(roomName))
+	tblSet(t, "energyAvailable", rt.IntValue(int64(energyAvail)))
+	tblSet(t, "energyCapacityAvailable", rt.IntValue(int64(energyCap)))
+	tblSet(t, "visual", rt.TableValue(vm.newRoomVisual(roomName)))
+	tblSet(t, "memory", rt.TableValue(vm.getOrCreateRoomMemory(roomName)))
 	if ctrlID != "" {
 		if ctrlTbl := vm.wrapEntityByID(ctrlID); ctrlTbl != nil {
-			t.RawSetString("controller", ctrlTbl)
+			tblSet(t, "controller", rt.TableValue(ctrlTbl))
 		}
 	}
-	L.SetMetatable(t, vm.roomMT)
+	t.SetMetatable(vm.roomMT)
 	return t
 }
 
-func (vm *BotVM) wrapEntityByID(id string) *lua.LTable {
+func (vm *BotVM) wrapEntityByID(id string) *rt.Table {
 	if cached, ok := vm.objCache[id]; ok {
 		return cached
 	}
@@ -666,167 +755,164 @@ func (vm *BotVM) wrapEntityByID(id string) *lua.LTable {
 		typ == engine.TYPE_CREEP || typ == engine.STRUCTURE_SPAWN || typ == engine.STRUCTURE_EXTENSION ||
 		typ == engine.STRUCTURE_TOWER || typ == engine.STRUCTURE_LINK || typ == engine.STRUCTURE_CONTAINER ||
 		typ == engine.STRUCTURE_STORAGE || typ == engine.TYPE_TOMBSTONE
-	var storeTbl *lua.LTable
+	var storeTbl *rt.Table
 	if hasStore {
 		storeTbl = vm.newStore(e)
 	}
 	vm.world.RUnlock()
 
-	L := vm.L
-	t := L.NewTable()
+	t := rt.NewTable()
 	vm.objCache[id] = t
 
-	t.RawSetString("id", lua.LString(id))
-	t.RawSetString("pos", vm.newRoomPosition(ex, ey, roomName))
+	tblSet(t, "id", rt.StringValue(id))
+	tblSet(t, "pos", rt.TableValue(vm.newRoomPosition(ex, ey, roomName)))
 	if rTbl := vm.wrapRoomByName(roomName); rTbl != nil {
-		t.RawSetString("room", rTbl)
+		tblSet(t, "room", rt.TableValue(rTbl))
 	}
 	if name != "" {
-		t.RawSetString("name", lua.LString(name))
+		tblSet(t, "name", rt.StringValue(name))
 	}
 	if hitsMax > 0 {
-		t.RawSetString("hits", lua.LNumber(hits))
-		t.RawSetString("hitsMax", lua.LNumber(hitsMax))
+		tblSet(t, "hits", rt.IntValue(int64(hits)))
+		tblSet(t, "hitsMax", rt.IntValue(int64(hitsMax)))
 	}
 	if user != "" {
-		t.RawSetString("my", lua.LBool(user == vm.UserID))
+		tblSet(t, "my", rt.BoolValue(user == vm.UserID))
 		if ownerName != "" {
-			owner := L.NewTable()
-			owner.RawSetString("username", lua.LString(ownerName))
-			t.RawSetString("owner", owner)
+			owner := rt.NewTable()
+			tblSet(owner, "username", rt.StringValue(ownerName))
+			tblSet(t, "owner", rt.TableValue(owner))
 		}
 	} else {
-		t.RawSetString("my", lua.LFalse)
+		tblSet(t, "my", rt.BoolValue(false))
 	}
 	if storeTbl != nil {
-		t.RawSetString("store", storeTbl)
+		tblSet(t, "store", rt.TableValue(storeTbl))
 	}
 	if isStruct {
-		t.RawSetString("structureType", lua.LString(typ))
+		tblSet(t, "structureType", rt.StringValue(typ))
 		if nextDecay > 0 {
 			rem := nextDecay - gameTime
 			if rem < 0 {
 				rem = 0
 			}
-			t.RawSetString("ticksToDecay", lua.LNumber(rem))
+			tblSet(t, "ticksToDecay", rt.IntValue(rem))
 		}
 	}
 
 	switch typ {
 	case engine.TYPE_CREEP:
-		t.RawSetString("fatigue", lua.LNumber(fatigue))
-		t.RawSetString("spawning", lua.LBool(spawning))
+		tblSet(t, "fatigue", rt.IntValue(int64(fatigue)))
+		tblSet(t, "spawning", rt.BoolValue(spawning))
 		if ageTime > 0 {
 			ttl := ageTime - gameTime
 			if ttl < 0 {
 				ttl = 0
 			}
-			t.RawSetString("ticksToLive", lua.LNumber(ttl))
+			tblSet(t, "ticksToLive", rt.IntValue(ttl))
 		}
-		bodyTbl := L.NewTable()
+		bodyTbl := rt.NewTable()
 		for i, bp := range bodyCopy {
-			bt := L.NewTable()
-			bt.RawSetString("type", lua.LString(bp.Type))
-			bt.RawSetString("hits", lua.LNumber(bp.Hits))
+			bt := rt.NewTable()
+			tblSet(bt, "type", rt.StringValue(bp.Type))
+			tblSet(bt, "hits", rt.IntValue(int64(bp.Hits)))
 			if bp.Boost != "" {
-				bt.RawSetString("boost", lua.LString(bp.Boost))
+				tblSet(bt, "boost", rt.StringValue(bp.Boost))
 			}
-			bodyTbl.RawSetInt(i+1, bt)
+			tblSetInt(bodyTbl, i+1, rt.TableValue(bt))
 		}
-		t.RawSetString("body", bodyTbl)
+		tblSet(t, "body", rt.TableValue(bodyTbl))
 		if user == vm.UserID && name != "" {
-			t.RawSetString("memory", vm.getOrCreateCreepMemory(name))
+			tblSet(t, "memory", rt.TableValue(vm.getOrCreateCreepMemory(name)))
 		}
-		L.SetMetatable(t, vm.creepMT)
+		t.SetMetatable(vm.creepMT)
 
 	case engine.STRUCTURE_SPAWN:
 		if spInfo != nil {
-			spTbl := L.NewTable()
-			spTbl.RawSetString("name", lua.LString(spInfo.Name))
-			spTbl.RawSetString("needTime", lua.LNumber(spInfo.NeedTime))
+			spTbl := rt.NewTable()
+			tblSet(spTbl, "name", rt.StringValue(spInfo.Name))
+			tblSet(spTbl, "needTime", rt.IntValue(int64(spInfo.NeedTime)))
 			rem := spInfo.SpawnTime - gameTime
 			if rem < 0 {
 				rem = 0
 			}
-			spTbl.RawSetString("remainingTime", lua.LNumber(rem))
-			t.RawSetString("spawning", spTbl)
+			tblSet(spTbl, "remainingTime", rt.IntValue(rem))
+			tblSet(t, "spawning", rt.TableValue(spTbl))
 		} else {
-			t.RawSetString("spawning", lua.LNil)
+			tblSet(t, "spawning", rt.NilValue)
 		}
-		L.SetMetatable(t, vm.spawnMT)
+		t.SetMetatable(vm.spawnMT)
 
 	case engine.STRUCTURE_TOWER:
-		L.SetMetatable(t, vm.towerMT)
+		t.SetMetatable(vm.towerMT)
 
 	case engine.STRUCTURE_LINK:
-		t.RawSetString("cooldown", lua.LNumber(cooldown))
-		L.SetMetatable(t, vm.linkMT)
+		tblSet(t, "cooldown", rt.IntValue(int64(cooldown)))
+		t.SetMetatable(vm.linkMT)
 
 	case engine.STRUCTURE_CONTROLLER:
-		t.RawSetString("level", lua.LNumber(level))
-		t.RawSetString("progress", lua.LNumber(progress))
-		t.RawSetString("progressTotal", lua.LNumber(progressTotal))
-		t.RawSetString("safeModeAvailable", lua.LNumber(safeModeAvail))
+		tblSet(t, "level", rt.IntValue(int64(level)))
+		tblSet(t, "progress", rt.IntValue(int64(progress)))
+		tblSet(t, "progressTotal", rt.IntValue(int64(progressTotal)))
+		tblSet(t, "safeModeAvailable", rt.IntValue(int64(safeModeAvail)))
 		if safeMode > gameTime {
-			t.RawSetString("safeMode", lua.LNumber(safeMode-gameTime))
+			tblSet(t, "safeMode", rt.IntValue(safeMode-gameTime))
 		}
 		if safeModeCD > gameTime {
-			t.RawSetString("safeModeCooldown", lua.LNumber(safeModeCD-gameTime))
+			tblSet(t, "safeModeCooldown", rt.IntValue(safeModeCD-gameTime))
 		}
 		if downgradeTime > 0 {
 			rem := downgradeTime - gameTime
 			if rem < 0 {
 				rem = 0
 			}
-			t.RawSetString("ticksToDowngrade", lua.LNumber(rem))
+			tblSet(t, "ticksToDowngrade", rt.IntValue(rem))
 		}
 		ctrlID := id
-		t.RawSetString("activateSafeMode", L.NewFunction(func(L *lua.LState) int {
+		tblSet(t, "activateSafeMode", rt.FunctionValue(vm.newGoFunc("Controller.activateSafeMode", func(th *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 			if vm.world == nil {
-				L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-				return 1
+				return c.PushingNext1(th.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 			}
 			code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 				Type:    engine.IntentActivateSafeMode,
 				ActorID: ctrlID,
 			})
-			L.Push(lua.LNumber(code))
-			return 1
-		}))
+			return c.PushingNext1(th.Runtime, rt.IntValue(int64(code))), nil
+		}, 1, false)))
 
 	case engine.TYPE_SOURCE:
-		t.RawSetString("energy", lua.LNumber(energy))
-		t.RawSetString("energyCapacity", lua.LNumber(energyCap))
+		tblSet(t, "energy", rt.IntValue(int64(energy)))
+		tblSet(t, "energyCapacity", rt.IntValue(int64(energyCap)))
 		if nextRegen > 0 {
 			rem := nextRegen - gameTime
 			if rem < 0 {
 				rem = 0
 			}
-			t.RawSetString("ticksToRegeneration", lua.LNumber(rem))
+			tblSet(t, "ticksToRegeneration", rt.IntValue(rem))
 		}
 
 	case engine.TYPE_MINERAL:
-		t.RawSetString("mineralType", lua.LString(mineralType))
-		t.RawSetString("mineralAmount", lua.LNumber(mineralAmt))
+		tblSet(t, "mineralType", rt.StringValue(mineralType))
+		tblSet(t, "mineralAmount", rt.IntValue(int64(mineralAmt)))
 
 	case engine.TYPE_CONSTRUCTION_SITE:
-		t.RawSetString("structureType", lua.LString(siteStructType))
-		t.RawSetString("progress", lua.LNumber(progress))
-		t.RawSetString("progressTotal", lua.LNumber(progressTotal))
+		tblSet(t, "structureType", rt.StringValue(siteStructType))
+		tblSet(t, "progress", rt.IntValue(int64(progress)))
+		tblSet(t, "progressTotal", rt.IntValue(int64(progressTotal)))
 
 	case engine.TYPE_RESOURCE:
-		t.RawSetString("resourceType", lua.LString(resType))
-		t.RawSetString("amount", lua.LNumber(amount))
+		tblSet(t, "resourceType", rt.StringValue(resType))
+		tblSet(t, "amount", rt.IntValue(int64(amount)))
 
 	case engine.TYPE_TOMBSTONE:
-		t.RawSetString("creepId", lua.LString(creepID))
-		t.RawSetString("deathTime", lua.LNumber(deathTime))
+		tblSet(t, "creepId", rt.StringValue(creepID))
+		tblSet(t, "deathTime", rt.IntValue(deathTime))
 		if decayTime > 0 {
 			rem := decayTime - gameTime
 			if rem < 0 {
 				rem = 0
 			}
-			t.RawSetString("ticksToDecay", lua.LNumber(rem))
+			tblSet(t, "ticksToDecay", rt.IntValue(rem))
 		}
 	}
 
@@ -835,170 +921,180 @@ func (vm *BotVM) wrapEntityByID(id string) *lua.LTable {
 
 // --- Coordinate extraction helpers ---
 
-func extractPos(v lua.LValue) (x, y int, roomName string, ok bool) {
-	tbl, isTbl := v.(*lua.LTable)
+func extractPos(v rt.Value) (x, y int, roomName string, ok bool) {
+	tbl, isTbl := v.TryTable()
 	if !isTbl {
 		return 0, 0, "", false
 	}
-	if posVal := tbl.RawGetString("pos"); posVal != lua.LNil {
-		if posTbl, ok2 := posVal.(*lua.LTable); ok2 {
+	if posVal := tblGet(tbl, "pos"); !posVal.IsNil() {
+		if posTbl, ok2 := posVal.TryTable(); ok2 {
 			tbl = posTbl
 		}
 	}
-	xv, okX := tbl.RawGetString("x").(lua.LNumber)
-	yv, okY := tbl.RawGetString("y").(lua.LNumber)
+	xv, okX := asInt(tblGet(tbl, "x"))
+	yv, okY := asInt(tblGet(tbl, "y"))
 	if !okX || !okY {
 		return 0, 0, "", false
 	}
-	rn, _ := tbl.RawGetString("roomName").(lua.LString)
-	return int(xv), int(yv), string(rn), true
+	rn, _ := tblGet(tbl, "roomName").TryString()
+	return xv, yv, rn, true
 }
 
-func extractTargetID(v lua.LValue) (string, bool) {
-	tbl, ok := v.(*lua.LTable)
+func extractTargetID(v rt.Value) (string, bool) {
+	tbl, ok := v.TryTable()
 	if !ok {
 		return "", false
 	}
-	id, ok := tbl.RawGetString("id").(lua.LString)
+	id, ok := tblGet(tbl, "id").TryString()
 	if !ok || id == "" {
 		return "", false
 	}
-	return string(id), true
+	return id, true
 }
 
 // --- RoomPosition methods ---
 
-func (vm *BotVM) posGetRangeTo(L *lua.LState) int {
-	x1, y1, r1, ok1 := extractPos(L.Get(1))
+func (vm *BotVM) posGetRangeTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	x1, y1, r1, ok1 := extractPos(argAt(c, 0))
 	if !ok1 {
-		L.Push(lua.LNumber(math.Inf(1)))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.FloatValue(math.Inf(1))), nil
 	}
 	var x2, y2 int
 	var r2 string
-	if L.Get(2).Type() == lua.LTNumber {
-		x2 = L.CheckInt(2)
-		y2 = L.CheckInt(3)
+	if isNumber(argAt(c, 1)) {
+		var err error
+		x2, err = checkInt(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		y2, err = checkInt(c, 2)
+		if err != nil {
+			return nil, err
+		}
 		r2 = r1
 	} else {
 		var ok2 bool
-		x2, y2, r2, ok2 = extractPos(L.Get(2))
+		x2, y2, r2, ok2 = extractPos(argAt(c, 1))
 		if !ok2 {
-			L.Push(lua.LNumber(math.Inf(1)))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.FloatValue(math.Inf(1))), nil
 		}
 	}
 	if r1 != "" && r2 != "" && r1 != r2 {
-		L.Push(lua.LNumber(math.Inf(1)))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.FloatValue(math.Inf(1))), nil
 	}
-	L.Push(lua.LNumber(engine.ChebyshevDist(x1, y1, x2, y2)))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ChebyshevDist(x1, y1, x2, y2)))), nil
 }
 
-func (vm *BotVM) posIsNearTo(L *lua.LState) int {
-	x1, y1, r1, ok1 := extractPos(L.Get(1))
+func (vm *BotVM) posIsNearTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	x1, y1, r1, ok1 := extractPos(argAt(c, 0))
 	if !ok1 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
 	var x2, y2 int
 	var r2 string
-	if L.Get(2).Type() == lua.LTNumber {
-		x2 = L.CheckInt(2)
-		y2 = L.CheckInt(3)
+	if isNumber(argAt(c, 1)) {
+		var err error
+		x2, err = checkInt(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		y2, err = checkInt(c, 2)
+		if err != nil {
+			return nil, err
+		}
 		r2 = r1
 	} else {
 		var ok2 bool
-		x2, y2, r2, ok2 = extractPos(L.Get(2))
+		x2, y2, r2, ok2 = extractPos(argAt(c, 1))
 		if !ok2 {
-			L.Push(lua.LFalse)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 		}
 	}
 	if r1 != "" && r2 != "" && r1 != r2 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
-	L.Push(lua.LBool(engine.ChebyshevDist(x1, y1, x2, y2) <= 1))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.BoolValue(engine.ChebyshevDist(x1, y1, x2, y2) <= 1)), nil
 }
 
-func (vm *BotVM) posInRangeTo(L *lua.LState) int {
-	x1, y1, r1, ok1 := extractPos(L.Get(1))
+func (vm *BotVM) posInRangeTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	x1, y1, r1, ok1 := extractPos(argAt(c, 0))
 	if !ok1 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
 	var x2, y2, rng int
 	var r2 string
-	if L.Get(2).Type() == lua.LTNumber {
-		x2 = L.CheckInt(2)
-		y2 = L.CheckInt(3)
-		rng = L.CheckInt(4)
+	var err error
+	if isNumber(argAt(c, 1)) {
+		if x2, err = checkInt(c, 1); err != nil {
+			return nil, err
+		}
+		if y2, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
+		if rng, err = checkInt(c, 3); err != nil {
+			return nil, err
+		}
 		r2 = r1
 	} else {
 		var ok2 bool
-		x2, y2, r2, ok2 = extractPos(L.Get(2))
+		x2, y2, r2, ok2 = extractPos(argAt(c, 1))
 		if !ok2 {
-			L.Push(lua.LFalse)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 		}
-		rng = L.CheckInt(3)
+		if rng, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
 	}
 	if r1 != "" && r2 != "" && r1 != r2 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
-	L.Push(lua.LBool(engine.ChebyshevDist(x1, y1, x2, y2) <= rng))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.BoolValue(engine.ChebyshevDist(x1, y1, x2, y2) <= rng)), nil
 }
 
-func (vm *BotVM) posIsEqualTo(L *lua.LState) int {
-	x1, y1, r1, ok1 := extractPos(L.Get(1))
+func (vm *BotVM) posIsEqualTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	x1, y1, r1, ok1 := extractPos(argAt(c, 0))
 	if !ok1 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
 	var x2, y2 int
 	var r2 string
-	if L.Get(2).Type() == lua.LTNumber {
-		x2 = L.CheckInt(2)
-		y2 = L.CheckInt(3)
+	if isNumber(argAt(c, 1)) {
+		var err error
+		if x2, err = checkInt(c, 1); err != nil {
+			return nil, err
+		}
+		if y2, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
 		r2 = r1
 	} else {
 		var ok2 bool
-		x2, y2, r2, ok2 = extractPos(L.Get(2))
+		x2, y2, r2, ok2 = extractPos(argAt(c, 1))
 		if !ok2 {
-			L.Push(lua.LFalse)
-			return 1
+			return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 		}
 	}
 	if r1 != "" && r2 != "" && r1 != r2 {
-		L.Push(lua.LFalse)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.BoolValue(false)), nil
 	}
-	L.Push(lua.LBool(x1 == x2 && y1 == y2))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.BoolValue(x1 == x2 && y1 == y2)), nil
 }
 
-func (vm *BotVM) posFindClosestByRange(L *lua.LState) int {
-	x1, y1, r1, ok1 := extractPos(L.Get(1))
+func (vm *BotVM) posFindClosestByRange(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	x1, y1, r1, ok1 := extractPos(argAt(c, 0))
 	if !ok1 {
-		L.Push(lua.LNil)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.NilValue), nil
 	}
-	list, ok := L.Get(2).(*lua.LTable)
+	list, ok := argAt(c, 1).TryTable()
 	if !ok {
-		L.Push(lua.LNil)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.NilValue), nil
 	}
 
-	var best lua.LValue = lua.LNil
+	best := rt.NilValue
 	bestDist := 1 << 30
-	n := list.Len()
+	n := int(list.Len())
 	for i := 1; i <= n; i++ {
-		item := list.RawGetInt(i)
+		item := tblGetInt(list, i)
 		x2, y2, r2, ok2 := extractPos(item)
 		if !ok2 {
 			continue
@@ -1012,28 +1108,32 @@ func (vm *BotVM) posFindClosestByRange(L *lua.LState) int {
 			best = item
 		}
 	}
-	L.Push(best)
-	return 1
+	return c.PushingNext1(t.Runtime, best), nil
 }
 
 // --- Store methods ---
 
-func (vm *BotVM) storeEntityID(L *lua.LState) string {
-	self := L.CheckTable(1)
-	mt, ok := L.GetMetatable(self).(*lua.LTable)
-	if !ok {
-		return ""
+func (vm *BotVM) storeEntityID(c *rt.GoCont) (string, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return "", err
 	}
-	id, _ := mt.RawGetString("__id").(lua.LString)
-	return string(id)
+	mt := self.Metatable()
+	if mt == nil {
+		return "", nil
+	}
+	id, _ := tblGet(mt, "__id").TryString()
+	return id, nil
 }
 
-func (vm *BotVM) storeGetUsedCapacity(L *lua.LState) int {
-	id := vm.storeEntityID(L)
-	res := L.OptString(2, "")
+func (vm *BotVM) storeGetUsedCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	id, err := vm.storeEntityID(c)
+	if err != nil {
+		return nil, err
+	}
+	res := optString(c, 1, "")
 	if id == "" || vm.world == nil {
-		L.Push(lua.LNumber(0))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
@@ -1044,16 +1144,17 @@ func (vm *BotVM) storeGetUsedCapacity(L *lua.LState) int {
 		}
 	}
 	vm.world.RUnlock()
-	L.Push(lua.LNumber(val))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
 }
 
-func (vm *BotVM) storeGetFreeCapacity(L *lua.LState) int {
-	id := vm.storeEntityID(L)
-	res := L.OptString(2, "")
+func (vm *BotVM) storeGetFreeCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	id, err := vm.storeEntityID(c)
+	if err != nil {
+		return nil, err
+	}
+	res := optString(c, 1, "")
 	if id == "" || vm.world == nil {
-		L.Push(lua.LNumber(0))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
@@ -1064,16 +1165,17 @@ func (vm *BotVM) storeGetFreeCapacity(L *lua.LState) int {
 		}
 	}
 	vm.world.RUnlock()
-	L.Push(lua.LNumber(val))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
 }
 
-func (vm *BotVM) storeGetCapacity(L *lua.LState) int {
-	id := vm.storeEntityID(L)
-	res := L.OptString(2, "")
+func (vm *BotVM) storeGetCapacity(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	id, err := vm.storeEntityID(c)
+	if err != nil {
+		return nil, err
+	}
+	res := optString(c, 1, "")
 	if id == "" || vm.world == nil {
-		L.Push(lua.LNumber(0))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(0)), nil
 	}
 	vm.world.RLock()
 	var val int
@@ -1084,150 +1186,208 @@ func (vm *BotVM) storeGetCapacity(L *lua.LState) int {
 		}
 	}
 	vm.world.RUnlock()
-	L.Push(lua.LNumber(val))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(val))), nil
 }
 
 // --- RoomTerrain methods ---
 
-func (vm *BotVM) terrainGet(L *lua.LState) int {
-	ud := L.CheckUserData(1)
-	x := L.CheckInt(2)
-	y := L.CheckInt(3)
-	grid, _ := ud.Value.(*[engine.RoomSize * engine.RoomSize]uint8)
-	if grid == nil || !engine.InBounds(x, y) {
-		L.Push(lua.LNumber(engine.TERRAIN_MASK_WALL))
-		return 1
+func (vm *BotVM) terrainGet(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	ud, err := checkUserData(c, 0)
+	if err != nil {
+		return nil, err
 	}
-	L.Push(lua.LNumber(grid[y*engine.RoomSize+x]))
-	return 1
+	x, err := checkInt(c, 1)
+	if err != nil {
+		return nil, err
+	}
+	y, err := checkInt(c, 2)
+	if err != nil {
+		return nil, err
+	}
+	grid, _ := ud.Value().(*[engine.RoomSize * engine.RoomSize]uint8)
+	if grid == nil || !engine.InBounds(x, y) {
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.TERRAIN_MASK_WALL))), nil
+	}
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(grid[y*engine.RoomSize+x]))), nil
 }
 
 // --- RoomVisual methods ---
 
-func parseVisualStyle(styleVal lua.LValue) (radius float32, fill, col string, opac, sw float32) {
+func parseVisualStyle(styleVal rt.Value) (radius float32, fill, col string, opac, sw float32) {
 	opac = 0.5
 	sw = 0.1
-	tbl, ok := styleVal.(*lua.LTable)
+	tbl, ok := styleVal.TryTable()
 	if !ok {
 		return
 	}
-	if v, ok := tbl.RawGetString("radius").(lua.LNumber); ok {
+	if v, ok := asFloat(tblGet(tbl, "radius")); ok {
 		radius = float32(v)
 	}
-	if v, ok := tbl.RawGetString("fill").(lua.LString); ok {
-		fill = string(v)
+	if v, ok := tblGet(tbl, "fill").TryString(); ok {
+		fill = v
 	}
-	if v, ok := tbl.RawGetString("stroke").(lua.LString); ok {
-		col = string(v)
+	if v, ok := tblGet(tbl, "stroke").TryString(); ok {
+		col = v
 	}
-	if v, ok := tbl.RawGetString("color").(lua.LString); ok && col == "" {
-		col = string(v)
+	if v, ok := tblGet(tbl, "color").TryString(); ok && col == "" {
+		col = v
 	}
-	if v, ok := tbl.RawGetString("opacity").(lua.LNumber); ok {
+	if v, ok := asFloat(tblGet(tbl, "opacity")); ok {
 		opac = float32(v)
 	}
-	if v, ok := tbl.RawGetString("strokeWidth").(lua.LNumber); ok {
+	if v, ok := asFloat(tblGet(tbl, "strokeWidth")); ok {
 		sw = float32(v)
-	} else if v, ok := tbl.RawGetString("width").(lua.LNumber); ok {
+	} else if v, ok := asFloat(tblGet(tbl, "width")); ok {
 		sw = float32(v)
 	}
 	return
 }
 
-func (vm *BotVM) visualCircle(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("roomName").(lua.LString)
+func (vm *BotVM) visualCircle(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "roomName").TryString()
 	var x, y float32
-	var styleVal lua.LValue
-	if L.Get(2).Type() == lua.LTTable {
-		px, py, _, _ := extractPos(L.Get(2))
+	var styleVal rt.Value
+	if argAt(c, 1).Type() == rt.TableType {
+		px, py, _, _ := extractPos(argAt(c, 1))
 		x, y = float32(px), float32(py)
-		styleVal = L.Get(3)
+		styleVal = argAt(c, 2)
 	} else {
-		x = float32(L.CheckNumber(2))
-		y = float32(L.CheckNumber(3))
-		styleVal = L.Get(4)
+		xf, err := checkFloat(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		yf, err := checkFloat(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		x, y = float32(xf), float32(yf)
+		styleVal = argAt(c, 3)
 	}
 	r, fill, col, opac, sw := parseVisualStyle(styleVal)
 	if vm.world != nil {
-		vm.world.AddVisual(string(roomName), screeps.VisualOp{
+		vm.world.AddVisual(roomName, screeps.VisualOp{
 			Type: "c", X: x, Y: y, R: r, Fill: fill, Col: col, Opac: opac, SW: sw,
 		})
 	}
-	L.Push(self)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
-func (vm *BotVM) visualLine(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("roomName").(lua.LString)
+func (vm *BotVM) visualLine(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "roomName").TryString()
 	var x1, y1, x2, y2 float32
-	var styleVal lua.LValue
-	if L.Get(2).Type() == lua.LTTable {
-		px1, py1, _, _ := extractPos(L.Get(2))
-		px2, py2, _, _ := extractPos(L.Get(3))
+	var styleVal rt.Value
+	if argAt(c, 1).Type() == rt.TableType {
+		px1, py1, _, _ := extractPos(argAt(c, 1))
+		px2, py2, _, _ := extractPos(argAt(c, 2))
 		x1, y1, x2, y2 = float32(px1), float32(py1), float32(px2), float32(py2)
-		styleVal = L.Get(4)
+		styleVal = argAt(c, 3)
 	} else {
-		x1 = float32(L.CheckNumber(2))
-		y1 = float32(L.CheckNumber(3))
-		x2 = float32(L.CheckNumber(4))
-		y2 = float32(L.CheckNumber(5))
-		styleVal = L.Get(6)
+		f1, err := checkFloat(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		f2, err := checkFloat(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		f3, err := checkFloat(c, 3)
+		if err != nil {
+			return nil, err
+		}
+		f4, err := checkFloat(c, 4)
+		if err != nil {
+			return nil, err
+		}
+		x1, y1, x2, y2 = float32(f1), float32(f2), float32(f3), float32(f4)
+		styleVal = argAt(c, 5)
 	}
 	_, _, col, opac, sw := parseVisualStyle(styleVal)
 	if vm.world != nil {
-		vm.world.AddVisual(string(roomName), screeps.VisualOp{
+		vm.world.AddVisual(roomName, screeps.VisualOp{
 			Type: "l", X: x1, Y: y1, X2: x2, Y2: y2, Col: col, Opac: opac, SW: sw,
 		})
 	}
-	L.Push(self)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
-func (vm *BotVM) visualRect(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("roomName").(lua.LString)
+func (vm *BotVM) visualRect(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "roomName").TryString()
 	var x, y, w, h float32
-	var styleVal lua.LValue
-	if L.Get(2).Type() == lua.LTTable {
-		px, py, _, _ := extractPos(L.Get(2))
+	var styleVal rt.Value
+	if argAt(c, 1).Type() == rt.TableType {
+		px, py, _, _ := extractPos(argAt(c, 1))
 		x, y = float32(px), float32(py)
-		w = float32(L.CheckNumber(3))
-		h = float32(L.CheckNumber(4))
-		styleVal = L.Get(5)
+		wf, err := checkFloat(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		hf, err := checkFloat(c, 3)
+		if err != nil {
+			return nil, err
+		}
+		w, h = float32(wf), float32(hf)
+		styleVal = argAt(c, 4)
 	} else {
-		x = float32(L.CheckNumber(2))
-		y = float32(L.CheckNumber(3))
-		w = float32(L.CheckNumber(4))
-		h = float32(L.CheckNumber(5))
-		styleVal = L.Get(6)
+		xf, err := checkFloat(c, 1)
+		if err != nil {
+			return nil, err
+		}
+		yf, err := checkFloat(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		wf, err := checkFloat(c, 3)
+		if err != nil {
+			return nil, err
+		}
+		hf, err := checkFloat(c, 4)
+		if err != nil {
+			return nil, err
+		}
+		x, y, w, h = float32(xf), float32(yf), float32(wf), float32(hf)
+		styleVal = argAt(c, 5)
 	}
 	_, fill, col, opac, sw := parseVisualStyle(styleVal)
 	if vm.world != nil {
-		vm.world.AddVisual(string(roomName), screeps.VisualOp{
+		vm.world.AddVisual(roomName, screeps.VisualOp{
 			Type: "r", X: x, Y: y, W: w, H: h, Fill: fill, Col: col, Opac: opac, SW: sw,
 		})
 	}
-	L.Push(self)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
-func (vm *BotVM) visualPoly(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("roomName").(lua.LString)
-	ptsTbl := L.CheckTable(2)
-	styleVal := L.Get(3)
+func (vm *BotVM) visualPoly(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "roomName").TryString()
+	ptsTbl, err := checkTable(c, 1)
+	if err != nil {
+		return nil, err
+	}
+	styleVal := argAt(c, 2)
 	var pts [][2]float32
-	n := ptsTbl.Len()
+	n := int(ptsTbl.Len())
 	for i := 1; i <= n; i++ {
-		item := ptsTbl.RawGetInt(i)
-		if pair, ok := item.(*lua.LTable); ok {
-			if px, py, _, ok2 := extractPos(pair); ok2 {
+		item := tblGetInt(ptsTbl, i)
+		if pair, ok := item.TryTable(); ok {
+			if px, py, _, ok2 := extractPos(item); ok2 {
 				pts = append(pts, [2]float32{float32(px), float32(py)})
-			} else if xv, okX := pair.RawGetInt(1).(lua.LNumber); okX {
-				if yv, okY := pair.RawGetInt(2).(lua.LNumber); okY {
+			} else if xv, okX := asFloat(tblGetInt(pair, 1)); okX {
+				if yv, okY := asFloat(tblGetInt(pair, 2)); okY {
 					pts = append(pts, [2]float32{float32(xv), float32(yv)})
 				}
 			}
@@ -1235,51 +1395,67 @@ func (vm *BotVM) visualPoly(L *lua.LState) int {
 	}
 	_, fill, col, opac, sw := parseVisualStyle(styleVal)
 	if vm.world != nil {
-		vm.world.AddVisual(string(roomName), screeps.VisualOp{
+		vm.world.AddVisual(roomName, screeps.VisualOp{
 			Type: "p", Pts: pts, Fill: fill, Col: col, Opac: opac, SW: sw,
 		})
 	}
-	L.Push(self)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
-func (vm *BotVM) visualText(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("roomName").(lua.LString)
-	text := L.CheckString(2)
+func (vm *BotVM) visualText(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "roomName").TryString()
+	text, err := checkString(c, 1)
+	if err != nil {
+		return nil, err
+	}
 	var x, y float32
-	var styleVal lua.LValue
-	if L.Get(3).Type() == lua.LTTable {
-		px, py, _, _ := extractPos(L.Get(3))
+	var styleVal rt.Value
+	if argAt(c, 2).Type() == rt.TableType {
+		px, py, _, _ := extractPos(argAt(c, 2))
 		x, y = float32(px), float32(py)
-		styleVal = L.Get(4)
+		styleVal = argAt(c, 3)
 	} else {
-		x = float32(L.CheckNumber(3))
-		y = float32(L.CheckNumber(4))
-		styleVal = L.Get(5)
+		xf, err := checkFloat(c, 2)
+		if err != nil {
+			return nil, err
+		}
+		yf, err := checkFloat(c, 3)
+		if err != nil {
+			return nil, err
+		}
+		x, y = float32(xf), float32(yf)
+		styleVal = argAt(c, 4)
 	}
 	_, _, col, opac, _ := parseVisualStyle(styleVal)
 	if vm.world != nil {
-		vm.world.AddVisual(string(roomName), screeps.VisualOp{
+		vm.world.AddVisual(roomName, screeps.VisualOp{
 			Type: "t", Text: text, X: x, Y: y, Col: col, Opac: opac,
 		})
 	}
-	L.Push(self)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
 // --- Room methods ---
 
-func (vm *BotVM) roomFind(L *lua.LState) int {
-	self := L.CheckTable(1)
-	findConst := L.CheckInt(2)
-	optsVal := L.Get(3)
-	roomName, _ := self.RawGetString("name").(lua.LString)
+func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	findConst, err := checkInt(c, 1)
+	if err != nil {
+		return nil, err
+	}
+	optsVal := argAt(c, 2)
+	roomName, _ := tblGet(self, "name").TryString()
 
-	resTbl := L.NewTable()
+	resTbl := rt.NewTable()
 	if vm.world == nil {
-		L.Push(resTbl)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 	}
 
 	// Exit finds return RoomPosition tables.
@@ -1287,7 +1463,7 @@ func (vm *BotVM) roomFind(L *lua.LState) int {
 		findConst == engine.FIND_EXIT_BOTTOM || findConst == engine.FIND_EXIT_LEFT ||
 		findConst == engine.FIND_EXIT {
 		vm.world.RLock()
-		room := vm.world.Rooms[string(roomName)]
+		room := vm.world.Rooms[roomName]
 		var coords [][2]int
 		if room != nil {
 			addEdge := func(edge int) {
@@ -1328,15 +1504,14 @@ func (vm *BotVM) roomFind(L *lua.LState) int {
 			}
 		}
 		vm.world.RUnlock()
-		for i, c := range coords {
-			resTbl.RawSetInt(i+1, vm.newRoomPosition(c[0], c[1], string(roomName)))
+		for i, coord := range coords {
+			tblSetInt(resTbl, i+1, rt.TableValue(vm.newRoomPosition(coord[0], coord[1], roomName)))
 		}
-		L.Push(resTbl)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 	}
 
 	vm.world.RLock()
-	room := vm.world.Rooms[string(roomName)]
+	room := vm.world.Rooms[roomName]
 	var ids []string
 	if room != nil {
 		for _, e := range room.Entities {
@@ -1384,9 +1559,9 @@ func (vm *BotVM) roomFind(L *lua.LState) int {
 
 	sort.Strings(ids)
 
-	var filterFn *lua.LFunction
-	if optsTbl, ok := optsVal.(*lua.LTable); ok {
-		if f, ok := optsTbl.RawGetString("filter").(*lua.LFunction); ok {
+	var filterFn rt.Value
+	if optsTbl, ok := optsVal.TryTable(); ok {
+		if f := tblGet(optsTbl, "filter"); f.Type() == rt.FunctionType {
 			filterFn = f
 		}
 	}
@@ -1397,71 +1572,82 @@ func (vm *BotVM) roomFind(L *lua.LState) int {
 		if obj == nil {
 			continue
 		}
-		if filterFn != nil {
-			if err := L.CallByParam(lua.P{Fn: filterFn, NRet: 1, Protect: true}, obj); err != nil {
+		objVal := rt.TableValue(obj)
+		if !filterFn.IsNil() {
+			keep, err := rt.Call1(t, filterFn, objVal)
+			if err != nil {
 				continue
 			}
-			keep := L.Get(-1)
-			L.Pop(1)
-			if !lua.LVAsBool(keep) {
+			if !rt.Truth(keep) {
 				continue
 			}
 		}
-		resTbl.RawSetInt(idx, obj)
+		tblSetInt(resTbl, idx, objVal)
 		idx++
 	}
 
-	L.Push(resTbl)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 }
 
-func (vm *BotVM) roomCreateConstructionSite(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("name").(lua.LString)
+func (vm *BotVM) roomCreateConstructionSite(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "name").TryString()
 	if vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_ARGS))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 	}
 	var x, y int
 	var structType string
-	if L.Get(2).Type() == lua.LTTable {
+	if argAt(c, 1).Type() == rt.TableType {
 		var ok bool
-		x, y, _, ok = extractPos(L.Get(2))
+		x, y, _, ok = extractPos(argAt(c, 1))
 		if !ok {
-			L.Push(lua.LNumber(engine.ERR_INVALID_ARGS))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 		}
-		structType = L.CheckString(3)
+		structType, err = checkString(c, 2)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		x = L.CheckInt(2)
-		y = L.CheckInt(3)
-		structType = L.CheckString(4)
+		if x, err = checkInt(c, 1); err != nil {
+			return nil, err
+		}
+		if y, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
+		if structType, err = checkString(c, 3); err != nil {
+			return nil, err
+		}
 	}
-	_, code := vm.world.CreateConstructionSite(vm.UserID, string(roomName), x, y, structType)
-	L.Push(lua.LNumber(code))
-	return 1
+	_, code := vm.world.CreateConstructionSite(vm.UserID, roomName, x, y, structType)
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) roomGetTerrain(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("name").(lua.LString)
-	L.Push(vm.newRoomTerrain(string(roomName)))
-	return 1
+func (vm *BotVM) roomGetTerrain(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "name").TryString()
+	return c.PushingNext1(t.Runtime, vm.newRoomTerrain(roomName)), nil
 }
 
-func (vm *BotVM) roomFindExitTo(L *lua.LState) int {
-	self := L.CheckTable(1)
-	fromName, _ := self.RawGetString("name").(lua.LString)
-	target := strings.ToUpper(strings.TrimSpace(L.OptString(2, "")))
+func (vm *BotVM) roomFindExitTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	fromName, _ := tblGet(self, "name").TryString()
+	target := strings.ToUpper(strings.TrimSpace(optString(c, 1, "")))
 	if target == "" || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_ARGS))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 	}
-	fx, fy, ok1 := engine.ParseRoomCoords(string(fromName))
+	fx, fy, ok1 := engine.ParseRoomCoords(fromName)
 	tx, ty, ok2 := engine.ParseRoomCoords(target)
 	if !ok1 || !ok2 {
-		L.Push(lua.LNumber(engine.ERR_INVALID_ARGS))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 	}
 	dx, dy := tx-fx, ty-fy
 	var exitConst int
@@ -1475,47 +1661,52 @@ func (vm *BotVM) roomFindExitTo(L *lua.LState) int {
 	case dx == -1 && dy == 0:
 		exitConst = engine.FIND_EXIT_LEFT
 	default:
-		L.Push(lua.LNumber(engine.ERR_NO_PATH))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NO_PATH))), nil
 	}
 	vm.world.RLock()
-	r := vm.world.Rooms[string(fromName)]
+	r := vm.world.Rooms[fromName]
 	hasExit := r != nil && r.RoomHasExitEdge(exitConst) && vm.world.Rooms[target] != nil
 	vm.world.RUnlock()
 	if !hasExit {
-		L.Push(lua.LNumber(engine.ERR_NO_PATH))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NO_PATH))), nil
 	}
-	L.Push(lua.LNumber(exitConst))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(exitConst))), nil
 }
 
-func (vm *BotVM) roomLookForAt(L *lua.LState) int {
-	self := L.CheckTable(1)
-	roomName, _ := self.RawGetString("name").(lua.LString)
-	lookType := L.CheckString(2)
+func (vm *BotVM) roomLookForAt(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	self, err := checkTable(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	roomName, _ := tblGet(self, "name").TryString()
+	lookType, err := checkString(c, 1)
+	if err != nil {
+		return nil, err
+	}
 	var x, y int
-	if L.Get(3).Type() == lua.LTTable {
+	if argAt(c, 2).Type() == rt.TableType {
 		var ok bool
-		x, y, _, ok = extractPos(L.Get(3))
+		x, y, _, ok = extractPos(argAt(c, 2))
 		if !ok {
-			L.Push(L.NewTable())
-			return 1
+			return c.PushingNext1(t.Runtime, rt.TableValue(rt.NewTable())), nil
 		}
 	} else {
-		x = L.CheckInt(3)
-		y = L.CheckInt(4)
+		if x, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
+		if y, err = checkInt(c, 3); err != nil {
+			return nil, err
+		}
 	}
 
-	resTbl := L.NewTable()
+	resTbl := rt.NewTable()
 	if vm.world == nil {
-		L.Push(resTbl)
-		return 1
+		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 	}
 
 	if lookType == "terrain" {
 		vm.world.RLock()
-		room := vm.world.Rooms[string(roomName)]
+		room := vm.world.Rooms[roomName]
 		tStr := "wall"
 		if room != nil {
 			switch room.TerrainAt(x, y) {
@@ -1528,13 +1719,12 @@ func (vm *BotVM) roomLookForAt(L *lua.LState) int {
 			}
 		}
 		vm.world.RUnlock()
-		resTbl.RawSetInt(1, lua.LString(tStr))
-		L.Push(resTbl)
-		return 1
+		tblSetInt(resTbl, 1, rt.StringValue(tStr))
+		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 	}
 
 	vm.world.RLock()
-	room := vm.world.Rooms[string(roomName)]
+	room := vm.world.Rooms[roomName]
 	var ids []string
 	if room != nil {
 		for _, e := range room.EntitiesAt(x, y) {
@@ -1564,52 +1754,55 @@ func (vm *BotVM) roomLookForAt(L *lua.LState) int {
 
 	for i, id := range ids {
 		if obj := vm.wrapEntityByID(id); obj != nil {
-			resTbl.RawSetInt(i+1, obj)
+			tblSetInt(resTbl, i+1, rt.TableValue(obj))
 		}
 	}
-	L.Push(resTbl)
-	return 1
+	return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
 }
 
 // --- Creep methods ---
 
-func (vm *BotVM) creepMove(L *lua.LState) int {
-	id, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepMove(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	id, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	dir := L.CheckInt(2)
+	dir, err := checkInt(c, 1)
+	if err != nil {
+		return nil, err
+	}
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:      engine.IntentMove,
 		ActorID:   id,
 		Direction: dir,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) creepMoveTo(L *lua.LState) int {
-	id, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	id, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
 
 	var tx, ty int
-	var optsVal lua.LValue
-	if L.Get(2).Type() == lua.LTNumber {
-		tx = L.CheckInt(2)
-		ty = L.CheckInt(3)
-		optsVal = L.Get(4)
+	var optsVal rt.Value
+	if isNumber(argAt(c, 1)) {
+		var err error
+		if tx, err = checkInt(c, 1); err != nil {
+			return nil, err
+		}
+		if ty, err = checkInt(c, 2); err != nil {
+			return nil, err
+		}
+		optsVal = argAt(c, 3)
 	} else {
 		var okPos bool
-		tx, ty, _, okPos = extractPos(L.Get(2))
+		tx, ty, _, okPos = extractPos(argAt(c, 1))
 		if !okPos {
-			L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
-		optsVal = L.Get(3)
+		optsVal = argAt(c, 2)
 	}
 
 	pathOpts := engine.PathOpts{
@@ -1617,25 +1810,25 @@ func (vm *BotVM) creepMoveTo(L *lua.LState) int {
 	}
 	hasRange := false
 	customRange := 0
-	if optsTbl, ok := optsVal.(*lua.LTable); ok {
-		if v := optsTbl.RawGetString("ignoreCreeps"); v != lua.LNil {
-			pathOpts.IgnoreCreeps = lua.LVAsBool(v)
+	if optsTbl, ok := optsVal.TryTable(); ok {
+		if v := tblGet(optsTbl, "ignoreCreeps"); !v.IsNil() {
+			pathOpts.IgnoreCreeps = rt.Truth(v)
 		}
-		if v := optsTbl.RawGetString("ignoreRoads"); v != lua.LNil {
-			pathOpts.IgnoreRoads = lua.LVAsBool(v)
+		if v := tblGet(optsTbl, "ignoreRoads"); !v.IsNil() {
+			pathOpts.IgnoreRoads = rt.Truth(v)
 		}
-		if v, ok := optsTbl.RawGetString("maxOps").(lua.LNumber); ok {
-			pathOpts.MaxOps = int(v)
+		if v, ok := asInt(tblGet(optsTbl, "maxOps")); ok {
+			pathOpts.MaxOps = v
 		}
-		if v, ok := optsTbl.RawGetString("plainCost").(lua.LNumber); ok {
+		if v, ok := asInt(tblGet(optsTbl, "plainCost")); ok {
 			pathOpts.PlainCost = uint8(v)
 		}
-		if v, ok := optsTbl.RawGetString("swampCost").(lua.LNumber); ok {
+		if v, ok := asInt(tblGet(optsTbl, "swampCost")); ok {
 			pathOpts.SwampCost = uint8(v)
 		}
-		if v, ok := optsTbl.RawGetString("range").(lua.LNumber); ok {
+		if v, ok := asInt(tblGet(optsTbl, "range")); ok {
 			hasRange = true
-			customRange = int(v)
+			customRange = v
 		}
 	}
 
@@ -1651,33 +1844,27 @@ func (vm *BotVM) creepMoveTo(L *lua.LState) int {
 	}
 	if actor == nil || room == nil {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
 	if actor.User != vm.UserID {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.ERR_NOT_OWNER))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NOT_OWNER))), nil
 	}
 	if actor.Spawning {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.ERR_BUSY))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_BUSY))), nil
 	}
 	if actor.CountActiveParts(engine.MOVE) == 0 {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.ERR_NO_BODYPART))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NO_BODYPART))), nil
 	}
 	if actor.Fatigue > 0 {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.ERR_TIRED))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_TIRED))), nil
 	}
 	if actor.X == tx && actor.Y == ty {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.OK))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.OK))), nil
 	}
 
 	rng := 0
@@ -1688,8 +1875,7 @@ func (vm *BotVM) creepMoveTo(L *lua.LState) int {
 	}
 	if engine.ChebyshevDist(actor.X, actor.Y, tx, ty) <= rng {
 		vm.world.RUnlock()
-		L.Push(lua.LNumber(engine.OK))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.OK))), nil
 	}
 
 	res := engine.SearchPath(room, actor.X, actor.Y, []engine.Goal{{X: tx, Y: ty, Range: rng}}, pathOpts)
@@ -1705,8 +1891,7 @@ func (vm *BotVM) creepMoveTo(L *lua.LState) int {
 	vm.world.RUnlock()
 
 	if dir == 0 {
-		L.Push(lua.LNumber(engine.ERR_NO_PATH))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NO_PATH))), nil
 	}
 
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
@@ -1714,45 +1899,39 @@ func (vm *BotVM) creepMoveTo(L *lua.LState) int {
 		ActorID:   id,
 		Direction: dir,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) creepTargetIntent(intentType engine.IntentType) lua.LGFunction {
-	return func(L *lua.LState) int {
-		actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepTargetIntent(intentType engine.IntentType) rt.GoFunctionFunc {
+	return func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		actorID, ok := extractTargetID(argAt(c, 0))
 		if !ok || vm.world == nil {
-			L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
-		targetID, ok := extractTargetID(L.Get(2))
+		targetID, ok := extractTargetID(argAt(c, 1))
 		if !ok {
-			L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
 		code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 			Type:     intentType,
 			ActorID:  actorID,
 			TargetID: targetID,
 		})
-		L.Push(lua.LNumber(code))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 	}
 }
 
-func (vm *BotVM) creepTransfer(L *lua.LState) int {
-	actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepTransfer(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	targetID, ok := extractTargetID(L.Get(2))
+	targetID, ok := extractTargetID(argAt(c, 1))
 	if !ok {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	resType := L.OptString(3, engine.RESOURCE_ENERGY)
-	amount := L.OptInt(4, 0)
+	resType := optString(c, 2, engine.RESOURCE_ENERGY)
+	amount := optInt(c, 3, 0)
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:         engine.IntentTransfer,
 		ActorID:      actorID,
@@ -1760,23 +1939,20 @@ func (vm *BotVM) creepTransfer(L *lua.LState) int {
 		ResourceType: resType,
 		Amount:       amount,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) creepWithdraw(L *lua.LState) int {
-	actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepWithdraw(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	targetID, ok := extractTargetID(L.Get(2))
+	targetID, ok := extractTargetID(argAt(c, 1))
 	if !ok {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	resType := L.OptString(3, engine.RESOURCE_ENERGY)
-	amount := L.OptInt(4, 0)
+	resType := optString(c, 2, engine.RESOURCE_ENERGY)
+	amount := optInt(c, 3, 0)
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:         engine.IntentWithdraw,
 		ActorID:      actorID,
@@ -1784,79 +1960,75 @@ func (vm *BotVM) creepWithdraw(L *lua.LState) int {
 		ResourceType: resType,
 		Amount:       amount,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) creepDrop(L *lua.LState) int {
-	actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepDrop(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	resType := L.OptString(2, engine.RESOURCE_ENERGY)
-	amount := L.OptInt(3, 0)
+	resType := optString(c, 1, engine.RESOURCE_ENERGY)
+	amount := optInt(c, 2, 0)
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:         engine.IntentDrop,
 		ActorID:      actorID,
 		ResourceType: resType,
 		Amount:       amount,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) creepSay(L *lua.LState) int {
-	actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) creepSay(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	msg := L.OptString(2, "")
+	msg := optString(c, 1, "")
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:    engine.IntentSay,
 		ActorID: actorID,
 		Message: msg,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
 // --- StructureSpawn, StructureTower, StructureLink methods ---
 
-func (vm *BotVM) spawnCreep(L *lua.LState) int {
-	spawnID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) spawnCreep(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	spawnID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	bodyTbl, ok := L.Get(2).(*lua.LTable)
+	bodyTbl, ok := argAt(c, 1).TryTable()
 	if !ok {
-		L.Push(lua.LNumber(engine.ERR_INVALID_ARGS))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 	}
-	name := L.CheckString(3)
-	optsVal := L.Get(4)
+	name, err := checkString(c, 2)
+	if err != nil {
+		return nil, err
+	}
+	optsVal := argAt(c, 3)
 
-	n := bodyTbl.Len()
+	n := int(bodyTbl.Len())
 	body := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
-		if s, ok := bodyTbl.RawGetInt(i).(lua.LString); ok {
-			body = append(body, string(s))
+		if s, ok := tblGetInt(bodyTbl, i).TryString(); ok {
+			body = append(body, s)
 		}
 	}
 
 	var dirs []int
-	var memTbl *lua.LTable
-	if optsTbl, ok := optsVal.(*lua.LTable); ok {
-		if m, ok := optsTbl.RawGetString("memory").(*lua.LTable); ok {
+	var memTbl *rt.Table
+	if optsTbl, ok := optsVal.TryTable(); ok {
+		if m, ok := tblGet(optsTbl, "memory").TryTable(); ok {
 			memTbl = m
 		}
-		if dTbl, ok := optsTbl.RawGetString("directions").(*lua.LTable); ok {
-			dn := dTbl.Len()
+		if dTbl, ok := tblGet(optsTbl, "directions").TryTable(); ok {
+			dn := int(dTbl.Len())
 			for i := 1; i <= dn; i++ {
-				if d, ok := dTbl.RawGetInt(i).(lua.LNumber); ok {
-					dirs = append(dirs, int(d))
+				if d, ok := asInt(tblGetInt(dTbl, i)); ok {
+					dirs = append(dirs, d)
 				}
 			}
 		}
@@ -1872,162 +2044,175 @@ func (vm *BotVM) spawnCreep(L *lua.LState) int {
 
 	if code == engine.OK && memTbl != nil {
 		creepsMem := vm.ensureMemorySubtable("creeps")
-		creepsMem.RawSetString(name, memTbl)
+		tblSet(creepsMem, name, rt.TableValue(memTbl))
 	}
 
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
-func (vm *BotVM) structureTargetIntent(intentType engine.IntentType) lua.LGFunction {
-	return func(L *lua.LState) int {
-		actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) structureTargetIntent(intentType engine.IntentType) rt.GoFunctionFunc {
+	return func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		actorID, ok := extractTargetID(argAt(c, 0))
 		if !ok || vm.world == nil {
-			L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
-		targetID, ok := extractTargetID(L.Get(2))
+		targetID, ok := extractTargetID(argAt(c, 1))
 		if !ok {
-			L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-			return 1
+			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
 		code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 			Type:     intentType,
 			ActorID:  actorID,
 			TargetID: targetID,
 		})
-		L.Push(lua.LNumber(code))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 	}
 }
 
-func (vm *BotVM) linkTransferEnergy(L *lua.LState) int {
-	actorID, ok := extractTargetID(L.Get(1))
+func (vm *BotVM) linkTransferEnergy(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	actorID, ok := extractTargetID(argAt(c, 0))
 	if !ok || vm.world == nil {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	targetID, ok := extractTargetID(L.Get(2))
+	targetID, ok := extractTargetID(argAt(c, 1))
 	if !ok {
-		L.Push(lua.LNumber(engine.ERR_INVALID_TARGET))
-		return 1
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 	}
-	amount := L.OptInt(3, 0)
+	amount := optInt(c, 2, 0)
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
 		Type:     engine.IntentLinkTransfer,
 		ActorID:  actorID,
 		TargetID: targetID,
 		Amount:   amount,
 	})
-	L.Push(lua.LNumber(code))
-	return 1
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
 // --- PathFinder & CostMatrix methods ---
 
-func checkCostMatrix(L *lua.LState, idx int) *engine.CostMatrix {
-	ud := L.CheckUserData(idx)
-	cm, ok := ud.Value.(*engine.CostMatrix)
-	if !ok {
-		L.ArgError(idx, "expected PathFinder.CostMatrix")
-		return nil
+func checkCostMatrix(c *rt.GoCont, idx int) (*engine.CostMatrix, error) {
+	ud, err := checkUserData(c, idx)
+	if err != nil {
+		return nil, err
 	}
-	return cm
+	cm, ok := ud.Value().(*engine.CostMatrix)
+	if !ok {
+		return nil, fmt.Errorf("bad argument #%d (expected PathFinder.CostMatrix)", idx+1)
+	}
+	return cm, nil
 }
 
-func (vm *BotVM) costMatrixSet(L *lua.LState) int {
-	cm := checkCostMatrix(L, 1)
-	x := L.CheckInt(2)
-	y := L.CheckInt(3)
-	val := L.CheckInt(4)
+func (vm *BotVM) costMatrixSet(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	cm, err := checkCostMatrix(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	x, err := checkInt(c, 1)
+	if err != nil {
+		return nil, err
+	}
+	y, err := checkInt(c, 2)
+	if err != nil {
+		return nil, err
+	}
+	val, err := checkInt(c, 3)
+	if err != nil {
+		return nil, err
+	}
 	if val < 0 {
 		val = 0
 	} else if val > 255 {
 		val = 255
 	}
 	cm.Set(x, y, uint8(val))
-	return 0
+	return c.Next(), nil
 }
 
-func (vm *BotVM) costMatrixGet(L *lua.LState) int {
-	cm := checkCostMatrix(L, 1)
-	x := L.CheckInt(2)
-	y := L.CheckInt(3)
-	L.Push(lua.LNumber(cm.Get(x, y)))
-	return 1
+func (vm *BotVM) costMatrixGet(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	cm, err := checkCostMatrix(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	x, err := checkInt(c, 1)
+	if err != nil {
+		return nil, err
+	}
+	y, err := checkInt(c, 2)
+	if err != nil {
+		return nil, err
+	}
+	return c.PushingNext1(t.Runtime, rt.IntValue(int64(cm.Get(x, y)))), nil
 }
 
-func (vm *BotVM) costMatrixClone(L *lua.LState) int {
-	cm := checkCostMatrix(L, 1)
-	ud := L.NewUserData()
-	ud.Value = cm.Clone()
-	L.SetMetatable(ud, vm.costMatMT)
-	L.Push(ud)
-	return 1
+func (vm *BotVM) costMatrixClone(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	cm, err := checkCostMatrix(c, 0)
+	if err != nil {
+		return nil, err
+	}
+	ud := rt.NewUserData(cm.Clone(), vm.costMatMT)
+	return c.PushingNext1(t.Runtime, rt.UserDataValue(ud)), nil
 }
 
-func (vm *BotVM) pathFinderSearch(L *lua.LState) int {
-	ox, oy, roomName, ok := extractPos(L.Get(1))
+func (vm *BotVM) pathFinderSearch(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+	ox, oy, roomName, ok := extractPos(argAt(c, 0))
 	if !ok || vm.world == nil {
-		res := L.NewTable()
-		res.RawSetString("path", L.NewTable())
-		res.RawSetString("ops", lua.LNumber(0))
-		res.RawSetString("cost", lua.LNumber(0))
-		res.RawSetString("incomplete", lua.LTrue)
-		L.Push(res)
-		return 1
+		res := rt.NewTable()
+		tblSet(res, "path", rt.TableValue(rt.NewTable()))
+		tblSet(res, "ops", rt.IntValue(0))
+		tblSet(res, "cost", rt.IntValue(0))
+		tblSet(res, "incomplete", rt.BoolValue(true))
+		return c.PushingNext1(t.Runtime, rt.TableValue(res)), nil
 	}
 
 	var goals []engine.Goal
-	parseGoal := func(v lua.LValue) {
-		tbl, ok := v.(*lua.LTable)
+	parseGoal := func(v rt.Value) {
+		tbl, ok := v.TryTable()
 		if !ok {
 			return
 		}
-		gx, gy, _, okPos := extractPos(tbl)
+		gx, gy, _, okPos := extractPos(v)
 		if !okPos {
 			return
 		}
 		rng := 0
-		if rv, ok := tbl.RawGetString("range").(lua.LNumber); ok {
-			rng = int(rv)
+		if rv, ok := asInt(tblGet(tbl, "range")); ok {
+			rng = rv
 		}
 		goals = append(goals, engine.Goal{X: gx, Y: gy, Range: rng})
 	}
 
-	goalArg := L.Get(2)
-	if gTbl, ok := goalArg.(*lua.LTable); ok {
-		if gTbl.Len() > 0 {
-			for i := 1; i <= gTbl.Len(); i++ {
-				parseGoal(gTbl.RawGetInt(i))
+	goalArg := argAt(c, 1)
+	if gTbl, ok := goalArg.TryTable(); ok {
+		gLen := int(gTbl.Len())
+		if gLen > 0 {
+			for i := 1; i <= gLen; i++ {
+				parseGoal(tblGetInt(gTbl, i))
 			}
 		} else {
-			parseGoal(gTbl)
+			parseGoal(goalArg)
 		}
 	}
 
 	opts := engine.PathOpts{
 		MoverUser: vm.UserID,
 	}
-	if optsTbl, ok := L.Get(3).(*lua.LTable); ok {
-		if v, ok := optsTbl.RawGetString("plainCost").(lua.LNumber); ok {
+	if optsTbl, ok := argAt(c, 2).TryTable(); ok {
+		if v, ok := asInt(tblGet(optsTbl, "plainCost")); ok {
 			opts.PlainCost = uint8(v)
 		}
-		if v, ok := optsTbl.RawGetString("swampCost").(lua.LNumber); ok {
+		if v, ok := asInt(tblGet(optsTbl, "swampCost")); ok {
 			opts.SwampCost = uint8(v)
 		}
-		if v, ok := optsTbl.RawGetString("maxOps").(lua.LNumber); ok {
-			opts.MaxOps = int(v)
+		if v, ok := asInt(tblGet(optsTbl, "maxOps")); ok {
+			opts.MaxOps = v
 		}
-		if v := optsTbl.RawGetString("flee"); v != lua.LNil {
-			opts.Flee = lua.LVAsBool(v)
+		if v := tblGet(optsTbl, "flee"); !v.IsNil() {
+			opts.Flee = rt.Truth(v)
 		}
-		if cb, ok := optsTbl.RawGetString("roomCallback").(*lua.LFunction); ok {
-			if err := L.CallByParam(lua.P{Fn: cb, NRet: 1, Protect: true}, lua.LString(roomName)); err == nil {
-				ret := L.Get(-1)
-				L.Pop(1)
-				if ud, ok := ret.(*lua.LUserData); ok {
-					if cm, ok := ud.Value.(*engine.CostMatrix); ok {
+		if cb := tblGet(optsTbl, "roomCallback"); cb.Type() == rt.FunctionType {
+			if ret, err := rt.Call1(t, cb, rt.StringValue(roomName)); err == nil {
+				if ud, ok := ret.TryUserData(); ok {
+					if cm, ok := ud.Value().(*engine.CostMatrix); ok {
 						opts.CostMatrix = cm
 					}
 				}
@@ -2040,16 +2225,15 @@ func (vm *BotVM) pathFinderSearch(L *lua.LState) int {
 	pathRes := engine.SearchPath(room, ox, oy, goals, opts)
 	vm.world.RUnlock()
 
-	pathTbl := L.NewTable()
+	pathTbl := rt.NewTable()
 	for i, step := range pathRes.Path {
-		pathTbl.RawSetInt(i+1, vm.newRoomPosition(step.X, step.Y, roomName))
+		tblSetInt(pathTbl, i+1, rt.TableValue(vm.newRoomPosition(step.X, step.Y, roomName)))
 	}
 
-	out := L.NewTable()
-	out.RawSetString("path", pathTbl)
-	out.RawSetString("ops", lua.LNumber(pathRes.Ops))
-	out.RawSetString("cost", lua.LNumber(pathRes.Cost))
-	out.RawSetString("incomplete", lua.LBool(pathRes.Incomplete))
-	L.Push(out)
-	return 1
+	out := rt.NewTable()
+	tblSet(out, "path", rt.TableValue(pathTbl))
+	tblSet(out, "ops", rt.IntValue(int64(pathRes.Ops)))
+	tblSet(out, "cost", rt.IntValue(int64(pathRes.Cost)))
+	tblSet(out, "incomplete", rt.BoolValue(pathRes.Incomplete))
+	return c.PushingNext1(t.Runtime, rt.TableValue(out)), nil
 }
