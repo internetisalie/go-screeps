@@ -1,6 +1,6 @@
 -- economy.lua: Lean, fast-bootstrapping economy for the Raider colony.
 -- Roles: harvester, hauler, builder, upgrader.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 ---@class RaiderEconomy
 local M = {}

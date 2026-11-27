@@ -3,6 +3,8 @@
 /screeps-viewer
 /sim-bench
 /dist/
+*.test
+*.prof
 
 # Runtime persistence & logs
 world_state.json

@@ -1,6 +1,6 @@
 -- roles.lua: Full colony creep role behaviors for Screeps.
 -- Roles: harvester, miner, hauler, upgrader, builder, defender, scout, remoteHarvester, remoteHauler, assault, healer.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 ---@class RoomIntelEntry
 ---@field owner? string
@@ -1474,7 +1474,7 @@ local function selectAssaultTarget(creep)
     local chosen = nil
     local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
-        local bestScore = -9999
+        local bestScore = math.mininteger
         for _, h in ipairs(hostiles) do
             local d = creep.pos:getRangeTo(h)
             local hpFrac = (h.hits and h.hitsMax and h.hitsMax > 0) and (h.hits / h.hitsMax) or 1

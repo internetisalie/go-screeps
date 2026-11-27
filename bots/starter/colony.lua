@@ -1,15 +1,15 @@
 -- colony.lua: Object-oriented Colony manager for an owned Screeps room.
 -- Coordinates defense, links, spawning, remote mining, counter-assaults, planning, and HUD visuals.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
-local planner = require("planner")
-local DefenseManager = require("defense")
+local planner <const> = require("planner")
+local DefenseManager <const> = require("defense")
 
-local PLANNER_INTERVAL = 25
-local SCOUT_INTEL_TTL = 1500
+local PLANNER_INTERVAL <const> = 25
+local SCOUT_INTEL_TTL <const> = 1500
 
 ---@type table<integer, FindConstant>
-local EXIT_DIRS = {
+local EXIT_DIRS <const> = {
     [1] = FIND_EXIT_TOP,
     [3] = FIND_EXIT_RIGHT,
     [5] = FIND_EXIT_BOTTOM,
@@ -17,7 +17,7 @@ local EXIT_DIRS = {
 }
 
 ---@type table<string, integer>
-local PRESPAWN_TTL = {
+local PRESPAWN_TTL <const> = {
     miner = 80,
     hauler = 80,
     harvester = 80,
@@ -117,7 +117,7 @@ local function buildMinerBody(budget)
     if budget < 300 then
         return nil
     end
-    local workParts = math.max(2, math.min(5, math.floor((budget - 100) / 100)))
+    local workParts = math.max(2, math.min(5, (budget - 100) // 100))
     ---@type BodyPartType[]
     local body = {}
     local cost = 0
@@ -188,7 +188,7 @@ local function buildRemoteHaulerBody(budget)
     if budget < 200 then
         return nil
     end
-    local pairsCount = math.max(2, math.min(5, math.floor(math.min(budget, 500) / 100)))
+    local pairsCount = math.max(2, math.min(5, math.min(budget, 500) // 100))
     ---@type BodyPartType[]
     local body = {}
     for _ = 1, pairsCount do
@@ -781,7 +781,7 @@ function Colony:drawVisuals()
         if exitDir then
             local exitTiles = room:find(exitDir) or {}
             if #exitTiles > 0 then
-                local mid = exitTiles[math.max(1, math.floor((#exitTiles + 1) / 2))]
+                local mid = exitTiles[math.max(1, (#exitTiles + 1) // 2)]
                 if mid and mid.x and mid.y then
                     vis:line(spawn.pos.x, spawn.pos.y, mid.x, mid.y, {
                         color = "#00e5ff",

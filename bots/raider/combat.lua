@@ -1,12 +1,12 @@
 -- combat.lua: Home defense, tower control, cross-room scouting, and synchronized raiding squads.
 -- Roles: defender, scout, brawler, skirmisher, medic.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 ---@class RaiderCombat
 local M = {}
 
 ---@type table<integer, FindConstant>
-local EXIT_DIRS = {
+local EXIT_DIRS <const> = {
     [1] = FIND_EXIT_TOP,
     [3] = FIND_EXIT_RIGHT,
     [5] = FIND_EXIT_BOTTOM,
@@ -144,7 +144,7 @@ function M.buildBrawlerBody(budget)
     local body = {}
     local cost = 0
     -- Front-load TOUGH armor (up to 4).
-    local toughCount = math.min(4, math.floor(budget / 250))
+    local toughCount = math.min(4, budget // 250)
     for _ = 1, toughCount do
         if cost + 60 <= budget then
             table.insert(body, TOUGH)
@@ -162,7 +162,7 @@ function M.buildBrawlerBody(budget)
     end
     -- Reclaim reserved move budget and append MOVE parts.
     cost = cost - (attackCount * 50)
-    local moveCount = math.min(24 - #body, math.max(attackCount, math.floor((budget - cost) / 50)))
+    local moveCount = math.min(24 - #body, math.max(attackCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
             table.insert(body, MOVE)
@@ -198,7 +198,7 @@ function M.buildSkirmisherBody(budget)
         table.insert(body, 1, TOUGH)
         cost = cost + 10
     end
-    local moveCount = math.min(22 - #body, math.max(rangedCount, math.floor((budget - cost) / 50)))
+    local moveCount = math.min(22 - #body, math.max(rangedCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
             table.insert(body, MOVE)
@@ -226,7 +226,7 @@ function M.buildMedicBody(budget)
     if healCount == 0 then
         return { HEAL, MOVE }
     end
-    local moveCount = math.min(20 - #body, math.max(healCount, math.floor((budget - cost) / 50)))
+    local moveCount = math.min(20 - #body, math.max(healCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
             table.insert(body, MOVE)
@@ -648,7 +648,7 @@ local function selectRaidTarget(creep)
     local hostiles = room:find(FIND_HOSTILE_CREEPS) or {}
     if #hostiles > 0 then
         local best = nil
-        local bestScore = -9999
+        local bestScore = math.mininteger
         for _, h in ipairs(hostiles) do
             local d = creep.pos:getRangeTo(h)
             local hpFrac = (h.hits and h.hitsMax and h.hitsMax > 0) and (h.hits / h.hitsMax) or 1

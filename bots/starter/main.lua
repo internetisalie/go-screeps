@@ -1,9 +1,9 @@
 -- main.lua: Object-oriented Screeps autonomous colony AI entry point.
 -- Modules: colony.lua, defense.lua, planner.lua, roles.lua.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
-local Colony = require("colony")
-local roles = require("roles")
+local Colony <const> = require("colony")
+local roles <const> = require("roles")
 
 ---Remove stale Memory.creeps entries and initialize top-level Memory tables.
 local function cleanupMemory()

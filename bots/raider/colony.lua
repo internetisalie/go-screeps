@@ -1,12 +1,12 @@
 -- colony.lua: Object-oriented RaiderColony manager for an owned Raider room.
 -- Coordinates home defense, economy, scouting, synchronized raid wave spawning, planning, and HUD visuals.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
-local economy = require("economy")
-local planner = require("planner")
-local combat = require("combat")
+local economy <const> = require("economy")
+local planner <const> = require("planner")
+local combat <const> = require("combat")
 
-local PLANNER_INTERVAL = 20
+local PLANNER_INTERVAL <const> = 20
 
 ---@class RaiderRoleCounts
 ---@field harvester integer

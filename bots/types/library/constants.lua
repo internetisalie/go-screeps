@@ -1,5 +1,5 @@
 ---@meta
---- Go-Screeps engine constants injected into every Lua 5.1 bot VM by internal/lua/api.go.
+--- Go-Screeps engine constants injected into every Lua 5.4 bot VM by internal/lua/api.go.
 
 ---@alias ScreepsReturnCode integer
 ---@alias ScreepsDirection 1|2|3|4|5|6|7|8

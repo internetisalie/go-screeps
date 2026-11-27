@@ -1,5 +1,5 @@
 -- defense.lua: Object-oriented room threat tracking, tower focus-fire, Safe Mode, and combat body builders.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 ---@class ThreatState
 ---@field level integer 0=none, 1=weak (<=60), 2=normal (<=200), 3=strong (>200)
@@ -16,7 +16,7 @@ local DefenseManager = {}
 DefenseManager.__index = DefenseManager
 
 ---@type table<BodyPartType, integer>
-local PART_STRENGTH = {
+local PART_STRENGTH <const> = {
     attack = 30,
     ranged_attack = 10,
     heal = 12,
@@ -81,7 +81,7 @@ end
 ---@return Creep|nil
 local function selectFocusHostile(hostiles, anchorPos)
     local best = nil
-    local bestScore = 999999999
+    local bestScore = math.maxinteger
 
     for _, h in ipairs(hostiles) do
         local hp = h.hits or 100
@@ -421,7 +421,7 @@ function DefenseManager.buildAssaultBody(budget)
     ---@type BodyPartType[]
     local body = {}
     local cost = 0
-    local toughCount = math.min(4, math.floor(budget / 280))
+    local toughCount = math.min(4, budget // 280)
     for _ = 1, toughCount do
         if cost + 60 <= budget then
             table.insert(body, TOUGH)
@@ -439,7 +439,7 @@ function DefenseManager.buildAssaultBody(budget)
     if attackCount == 0 then
         return { TOUGH, ATTACK, ATTACK, MOVE, MOVE }
     end
-    local moveCount = math.min(24 - #body, math.max(attackCount + math.floor(toughCount / 2), math.floor((budget - cost) / 50)))
+    local moveCount = math.min(24 - #body, math.max(attackCount + (toughCount // 2), (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
             table.insert(body, MOVE)
@@ -470,7 +470,7 @@ function DefenseManager.buildHealerBody(budget)
     if healCount == 0 then
         return { HEAL, MOVE }
     end
-    local moveCount = math.min(20 - #body, math.max(healCount, math.floor((budget - cost) / 50)))
+    local moveCount = math.min(20 - #body, math.max(healCount, (budget - cost) // 50))
     for _ = 1, moveCount do
         if cost + 50 <= budget then
             table.insert(body, MOVE)

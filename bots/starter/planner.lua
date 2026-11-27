@@ -1,5 +1,5 @@
 -- planner.lua: Full RCL 1-8 automated room planner for Screeps.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
 ---@class PlanCoord
 ---@field x integer

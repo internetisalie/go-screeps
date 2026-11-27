@@ -1,10 +1,10 @@
 -- main.lua: Object-oriented Aggressive Raider Screeps colony AI entry point.
 -- Modules: colony.lua, economy.lua, planner.lua, combat.lua.
--- Compatible with Lua 5.1 (gopher-lua) and Lunar/LuaLS annotations.
+-- Idiomatic Lua 5.4 (arnodel/golua) with Lunar/LuaLS annotations.
 
-local RaiderColony = require("colony")
-local economy = require("economy")
-local combat = require("combat")
+local RaiderColony <const> = require("colony")
+local economy <const> = require("economy")
+local combat <const> = require("combat")
 
 ---Remove stale Memory.creeps entries and initialize top-level Raider Memory tables.
 local function cleanupMemory()
