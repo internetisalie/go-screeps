@@ -102,11 +102,12 @@ function RaiderBot:run()
 
     if game.rooms then
         for _, room in pairs(game.rooms) do
-            CombatAgent.updateIntel(room)
             local isMyRoom = (room.controller and room.controller.my)
                 or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
             if isMyRoom then
                 RaiderColony.new(room, globalCounts):run()
+            else
+                CombatAgent.updateIntel(room)
             end
         end
     end

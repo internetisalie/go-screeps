@@ -97,6 +97,8 @@ type viewerState struct {
 	tickAt      time.Time
 	tickPeriod  time.Duration
 	uiPending   atomic.Bool
+	uiTrailing  atomic.Bool
+	uiDirty     atomic.Bool
 	lastUISync  atomic.Int64 // unix nanos of last UI snapshot apply
 
 	dragging  bool
@@ -135,20 +137,35 @@ func (v viewerApp) CreateState() core.State {
 	s.appCtx = ctx
 	s.cancel = cancel
 
-	s.onUpdate = func() {
-		// Coalesce UI refreshes so high-speed simulation never backlogs Cocoa/Metal VSync.
-		nowNs := time.Now().UnixNano()
-		if nowNs-s.lastUISync.Load() < int64(16*time.Millisecond) {
+	var scheduleUI func()
+	scheduleUI = func() {
+		if ctx.Err() != nil {
 			return
 		}
+		// Coalesce UI refreshes (leading + trailing) so high-speed simulation never backlogs
+		// Cocoa/Metal VSync while guaranteeing the latest snapshot is never silently dropped.
+		const minInterval = int64(16 * time.Millisecond)
+		elapsed := time.Now().UnixNano() - s.lastUISync.Load()
+		if elapsed < minInterval {
+			if s.uiTrailing.CompareAndSwap(false, true) {
+				delay := time.Duration(minInterval - elapsed)
+				time.AfterFunc(delay, func() {
+					s.uiTrailing.Store(false)
+					scheduleUI()
+				})
+			}
+			return
+		}
+		s.uiDirty.Store(true)
 		if !s.uiPending.CompareAndSwap(false, true) {
 			return
 		}
 		gowaku.Post(func() {
-			defer s.uiPending.Store(false)
 			if ctx.Err() != nil {
+				s.uiPending.Store(false)
 				return
 			}
+			s.uiDirty.Store(false)
 			s.lastUISync.Store(time.Now().UnixNano())
 			s.SetState(func() {
 				if s.provider != nil {
@@ -156,8 +173,13 @@ func (v viewerApp) CreateState() core.State {
 				}
 			})
 			s.signal.Notify()
+			s.uiPending.Store(false)
+			if s.uiDirty.Load() {
+				scheduleUI()
+			}
 		})
 	}
+	s.onUpdate = scheduleUI
 
 	if v.local {
 		s.startLocalSim(false)
@@ -261,9 +283,8 @@ func (s *viewerState) startLocalSim(ignoreSaved bool) {
 		dbPath := strings.TrimSpace(v.dbPath)
 		if v.migrate {
 			if dbPath == "" {
-				dbPath = "/home/mini/Documents/src/screeps/server/db.json"
-			}
-			if err := world.ImportFullDBJSON(dbPath); err != nil {
+				log.Printf("local -migrate requires an explicit -db path (falling back to generated room)")
+			} else if err := world.ImportFullDBJSON(dbPath); err != nil {
 				log.Printf("local db migrate %q failed: %v (falling back to generated room)", dbPath, err)
 			}
 		} else if dbPath != "" {
@@ -390,6 +411,7 @@ func (s *viewerState) startLocalSim(ignoreSaved bool) {
 	s.anims = make(map[string]creepAnim)
 	s.creepPos = make(map[string][2]float32)
 	s.painter.CreepPos = s.creepPos
+	s.painter.ClearUnitTracking()
 	s.lastTick = 0
 	s.tickAt = time.Time{}
 
@@ -474,6 +496,11 @@ func (s *viewerState) applySnapshot(newSnap screeps.RoomSnapshot) {
 			}
 		}
 		s.anims = nextAnims
+		for id := range s.creepPos {
+			if _, alive := nextAnims[id]; !alive {
+				delete(s.creepPos, id)
+			}
+		}
 	}
 	s.updateCreepPositions()
 	if s.cam.FollowID != "" {
@@ -545,6 +572,7 @@ func (s *viewerState) switchRoom(name string) {
 	s.anims = make(map[string]creepAnim)
 	s.creepPos = make(map[string][2]float32)
 	s.painter.CreepPos = s.creepPos
+	s.painter.ClearUnitTracking()
 	s.provider.SwitchRoom(name)
 	if s.localRunner != nil {
 		s.SetState(func() {
@@ -1927,9 +1955,9 @@ func defaultStatePath() string {
 
 func singleInstanceSocket() string {
 	if runtime.GOOS == "linux" {
-		return "@go-screeps-instance"
+		return fmt.Sprintf("@go-screeps-instance-%d", os.Getuid())
 	}
-	return filepath.Join(os.TempDir(), "go-screeps.sock")
+	return filepath.Join(os.TempDir(), fmt.Sprintf("go-screeps-%d.sock", os.Getuid()))
 }
 
 // acquireSingleInstance enforces a single running instance via a Unix domain socket.
@@ -1977,6 +2005,12 @@ func acquireSingleInstance() (net.Listener, bool) {
 }
 
 func main() {
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run() error {
 	server := flag.String("server", "http://localhost:21025", "Screeps server base URL")
 	user := flag.String("user", "StarterBot", "Screeps username/email")
 	pass := flag.String("pass", "screeps123", "Screeps password")
@@ -1991,15 +2025,16 @@ func main() {
 	seed := flag.Int64("seed", 42, "Room generation seed in -local mode")
 	flag.Parse()
 
+	if *migrate && strings.TrimSpace(*dbPath) == "" {
+		return fmt.Errorf("-migrate requires an explicit -db path")
+	}
+
 	if ln, ok := acquireSingleInstance(); !ok {
 		log.Printf("go-screeps is already running; activated existing window")
-		return
+		return nil
 	} else if ln != nil {
 		defer func() {
 			_ = ln.Close()
-			if runtime.GOOS != "linux" {
-				_ = os.Remove(singleInstanceSocket())
-			}
 		}()
 	}
 
@@ -2023,7 +2058,5 @@ func main() {
 			seed:       *seed,
 		},
 	}
-	if err := gowaku.Run(app); err != nil {
-		log.Fatal(err)
-	}
+	return gowaku.Run(app)
 }

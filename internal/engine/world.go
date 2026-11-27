@@ -557,7 +557,9 @@ func (w *World) ensureUserLocked(username string) string {
 	return id
 }
 
-// GetRoom returns the room by name (case-insensitive), or nil.
+// GetRoom returns the live internal *Room pointer by name (case-insensitive), or nil.
+// Callers inspecting or mutating the returned Room concurrently with Step() must hold w.RLock()
+// (or w.Lock() for writes); for a race-free copy, use Snapshot() or ExportState().
 func (w *World) GetRoom(name string) *Room {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -576,7 +578,9 @@ func (w *World) RoomNames() []string {
 	return names
 }
 
-// GetEntity searches all rooms for an entity by ID.
+// GetEntity searches all rooms for an entity by ID and returns the live internal *Entity pointer, or nil.
+// Callers inspecting or mutating the returned Entity concurrently with Step() must hold w.RLock()
+// (or w.Lock() for writes); for a race-free copy, use Snapshot() or ExportState().
 func (w *World) GetEntity(id string) *Entity {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
@@ -844,17 +848,31 @@ func (w *World) GenerateRoom(name string, seed int64) *Room {
 			}
 		}
 		if len(openPositions) > 0 {
-			mid := openPositions[len(openPositions)/2]
-			switch e.dir {
-			case 1:
-				exitAnchors = append(exitAnchors, [2]int{mid, 2})
-			case 5:
-				exitAnchors = append(exitAnchors, [2]int{mid, RoomSize - 3})
-			case 7:
-				exitAnchors = append(exitAnchors, [2]int{2, mid})
-			case 3:
-				exitAnchors = append(exitAnchors, [2]int{RoomSize - 3, mid})
+			sort.Ints(openPositions)
+			addAnchor := func(mid int) {
+				switch e.dir {
+				case 1:
+					exitAnchors = append(exitAnchors, [2]int{mid, 2})
+				case 5:
+					exitAnchors = append(exitAnchors, [2]int{mid, RoomSize - 3})
+				case 7:
+					exitAnchors = append(exitAnchors, [2]int{2, mid})
+				case 3:
+					exitAnchors = append(exitAnchors, [2]int{RoomSize - 3, mid})
+				}
 			}
+			runStart, runEnd := openPositions[0], openPositions[0]
+			for i := 1; i < len(openPositions); i++ {
+				if openPositions[i] <= runEnd+1 {
+					if openPositions[i] > runEnd {
+						runEnd = openPositions[i]
+					}
+				} else {
+					addAnchor((runStart + runEnd) / 2)
+					runStart, runEnd = openPositions[i], openPositions[i]
+				}
+			}
+			addAnchor((runStart + runEnd) / 2)
 		}
 	}
 
@@ -1640,7 +1658,6 @@ func (w *World) ImportFullDBJSON(path string) error {
 					Y:             doc.Y,
 					ResourceType:  resType,
 					Amount:        amt,
-					Store:         map[string]int{resType: amt},
 					NextDecayTime: doc.NextDecayTime,
 				}
 

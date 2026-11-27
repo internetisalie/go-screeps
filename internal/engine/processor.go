@@ -37,6 +37,7 @@ func (w *World) Step() {
 	var towerIntents []Intent
 	var linkIntents []Intent
 	var safeModeIntents []Intent
+	var siteIntents []Intent
 
 	for _, in := range intents {
 		switch in.Type {
@@ -50,12 +51,14 @@ func (w *World) Step() {
 			linkIntents = append(linkIntents, in)
 		case IntentActivateSafeMode:
 			safeModeIntents = append(safeModeIntents, in)
+		case IntentCreateConstructionSite:
+			siteIntents = append(siteIntents, in)
 		default:
 			creepIntents = append(creepIntents, in)
 		}
 	}
 
-	// 0. Safe Mode activations (take effect before combat on this tick).
+	// 0. Safe Mode activations (take effect before combat on this tick) and queued construction sites.
 	for _, in := range safeModeIntents {
 		ctrl := w.getEntityLocked(in.ActorID)
 		if ctrl == nil || ctrl.Type != STRUCTURE_CONTROLLER || ctrl.User != in.UserID || ctrl.Level <= 0 {
@@ -69,6 +72,9 @@ func (w *World) Step() {
 		ctrl.SafeModeCooldown = w.GameTime + SAFE_MODE_COOLDOWN
 		w.recordEventLocked(ctrl.Room, "rcl", fmt.Sprintf("%s activated Safe Mode!", w.userNameLocked(ctrl.User)))
 	}
+	for _, in := range siteIntents {
+		w.createConstructionSiteLocked(in.UserID, in.TargetRoom, in.TargetX, in.TargetY, in.StructureType)
+	}
 
 	// 1. Spawns: start new spawns and complete finished ones.
 	processSpawns(w, roomNames, spawnIntents)
@@ -76,11 +82,11 @@ func (w *World) Step() {
 	// 2. Movement & fatigue.
 	resolveMovement(w, moveIntents)
 
-	// 3. Creep actions.
-	processCreepActions(w, creepIntents)
-
-	// 4. Towers & Links.
-	processTowers(w, towerIntents)
+	// 3 & 4. Creep actions, Towers, and Links — buffer combat damage/heal deltas so duels are order-independent.
+	deltas := newCombatDeltas()
+	processCreepActions(w, creepIntents, deltas)
+	processTowers(w, towerIntents, deltas)
+	deltas.apply()
 	processLinks(w, roomNames, linkIntents)
 
 	// 5. Passive room ticks: source regen, controller levels/downgrade, decay, deaths.
@@ -103,23 +109,27 @@ func processSpawns(w *World, roomNames []string, spawnIntents []Intent) {
 			continue
 		}
 
-		// Deduct energy from spawn first, then owned extensions sorted by ID.
+		// Deduct energy from the spawning spawn first, then other owned spawns and extensions sorted by ID.
 		rem := cost
 		rem -= spawn.SubStore(RESOURCE_ENERGY, rem)
 		if rem > 0 {
-			var extIDs []string
+			var srcIDs []string
 			for id, e := range room.Entities {
-				if e.Type == STRUCTURE_EXTENSION && e.User == in.UserID && e.UsedCapacity(RESOURCE_ENERGY) > 0 {
-					extIDs = append(extIDs, id)
+				if id != spawn.ID && (e.Type == STRUCTURE_EXTENSION || e.Type == STRUCTURE_SPAWN) && e.User == in.UserID && e.UsedCapacity(RESOURCE_ENERGY) > 0 {
+					srcIDs = append(srcIDs, id)
 				}
 			}
-			sort.Strings(extIDs)
-			for _, id := range extIDs {
+			sort.Strings(srcIDs)
+			for _, id := range srcIDs {
 				if rem <= 0 {
 					break
 				}
 				rem -= room.Entities[id].SubStore(RESOURCE_ENERGY, rem)
 			}
+		}
+		if rem > 0 {
+			// Should not happen since EnergyAvailable was checked, but never allow unpaid spawns.
+			continue
 		}
 
 		// Build creep body & entity (initially spawning at spawn's coordinates).
@@ -182,7 +192,12 @@ func processSpawns(w *World, roomNames []string, spawnIntents []Intent) {
 				continue
 			}
 
-			dirs := info.Directions
+			var dirs []int
+			for _, d := range info.Directions {
+				if d >= TOP && d <= TOP_LEFT {
+					dirs = append(dirs, d)
+				}
+			}
 			if len(dirs) == 0 {
 				dirs = []int{TOP, TOP_RIGHT, RIGHT, BOTTOM_RIGHT, BOTTOM, BOTTOM_LEFT, LEFT, TOP_LEFT}
 			}
@@ -214,16 +229,79 @@ func processSpawns(w *World, roomNames []string, spawnIntents []Intent) {
 	}
 }
 
-func processCreepActions(w *World, intents []Intent) {
-	// Keep one intent per (actorID, intentType) — last intent wins.
+type combatDeltas struct {
+	damage map[*Entity]int
+	heal   map[*Entity]int
+	order  []*Entity
+	seen   map[*Entity]bool
+}
+
+func newCombatDeltas() *combatDeltas {
+	return &combatDeltas{
+		damage: make(map[*Entity]int),
+		heal:   make(map[*Entity]int),
+		seen:   make(map[*Entity]bool),
+	}
+}
+
+func (d *combatDeltas) addDamage(e *Entity, amt int) {
+	if e == nil || amt <= 0 {
+		return
+	}
+	if !d.seen[e] {
+		d.seen[e] = true
+		d.order = append(d.order, e)
+	}
+	d.damage[e] += amt
+}
+
+func (d *combatDeltas) addHeal(e *Entity, amt int) {
+	if e == nil || amt <= 0 {
+		return
+	}
+	if !d.seen[e] {
+		d.seen[e] = true
+		d.order = append(d.order, e)
+	}
+	d.heal[e] += amt
+}
+
+func (d *combatDeltas) apply() {
+	for _, e := range d.order {
+		if dmg := d.damage[e]; dmg > 0 {
+			e.TakeDamage(dmg)
+		}
+		if heal := d.heal[e]; heal > 0 && e.Hits > 0 {
+			e.HealDamage(heal)
+		}
+	}
+}
+
+func actionConflictGroup(t IntentType) string {
+	switch t {
+	case IntentHarvest, IntentBuild, IntentRepair, IntentUpgradeController, IntentDismantle:
+		return "work"
+	case IntentHeal, IntentRangedHeal:
+		return "heal"
+	case IntentAttack:
+		return "attack"
+	case IntentRangedAttack:
+		return "ranged"
+	default:
+		return string(t)
+	}
+}
+
+func processCreepActions(w *World, intents []Intent, deltas *combatDeltas) {
+	// Keep one intent per (actorID, conflictGroup) — last intent wins.
 	type key struct {
 		actor string
-		typ   IntentType
+		group string
 	}
 	dedup := make(map[key]Intent, len(intents))
 	order := make([]key, 0, len(intents))
 	for _, in := range intents {
-		k := key{actor: in.ActorID, typ: in.Type}
+		k := key{actor: in.ActorID, group: actionConflictGroup(in.Type)}
 		if _, exists := dedup[k]; !exists {
 			order = append(order, k)
 		}
@@ -334,7 +412,7 @@ func processCreepActions(w *World, intents []Intent) {
 				res = RESOURCE_ENERGY
 			}
 			target := room.Entities[in.TargetID]
-			if target == nil || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			if target == nil || (!target.IsStructure() && target.Type != TYPE_TOMBSTONE) || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
 				continue
 			}
 			amt := in.Amount
@@ -380,7 +458,7 @@ func processCreepActions(w *World, intents []Intent) {
 
 		case IntentRepair:
 			target := room.Entities[in.TargetID]
-			if target == nil || !target.IsStructure() || target.HitsMax <= 0 || target.Hits >= target.HitsMax {
+			if target == nil || !target.IsStructure() || target.HitsMax <= 0 || target.Hits <= 0 || target.Hits >= target.HitsMax {
 				continue
 			}
 			if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
@@ -450,11 +528,15 @@ func processCreepActions(w *World, intents []Intent) {
 			if work == 0 {
 				continue
 			}
-			dmg := work * DISMANTLE_POWER
-			if dmg > target.Hits {
-				dmg = target.Hits
+			effective := resolveCombatTarget(w, room, actor.User, target)
+			if effective == nil {
+				continue
 			}
-			target.TakeDamage(dmg)
+			dmg := work * DISMANTLE_POWER
+			if dmg > effective.Hits {
+				dmg = effective.Hits
+			}
+			deltas.addDamage(effective, dmg)
 			gained := int(float64(dmg) * DISMANTLE_COST)
 			if gained > 0 {
 				stored := actor.AddStore(RESOURCE_ENERGY, gained)
@@ -466,50 +548,54 @@ func processCreepActions(w *World, intents []Intent) {
 
 		case IntentAttack:
 			target := room.Entities[in.TargetID]
-			if target == nil || target.HitsMax <= 0 || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			if target == nil || target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
 				continue
 			}
 			parts := actor.CountActiveParts(ATTACK)
 			if parts == 0 {
 				continue
 			}
-			applyCombatDamage(w, room, actor.User, target, parts*ATTACK_POWER)
+			if effective := resolveCombatTarget(w, room, actor.User, target); effective != nil {
+				deltas.addDamage(effective, parts*ATTACK_POWER)
+			}
 			actor.SetAction("attack", target.X, target.Y)
 
 		case IntentRangedAttack:
 			target := room.Entities[in.TargetID]
-			if target == nil || target.HitsMax <= 0 || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
+			if target == nil || target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
 				continue
 			}
 			parts := actor.CountActiveParts(RANGED_ATTACK)
 			if parts == 0 {
 				continue
 			}
-			applyCombatDamage(w, room, actor.User, target, parts*RANGED_ATTACK_POWER)
+			if effective := resolveCombatTarget(w, room, actor.User, target); effective != nil {
+				deltas.addDamage(effective, parts*RANGED_ATTACK_POWER)
+			}
 			actor.SetAction("rangedAttack", target.X, target.Y)
 
 		case IntentHeal:
 			target := room.Entities[in.TargetID]
-			if target == nil || target.Type != TYPE_CREEP || target.Spawning || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
+			if target == nil || target.Type != TYPE_CREEP || target.Spawning || target.Hits <= 0 || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
 				continue
 			}
 			parts := actor.CountActiveParts(HEAL)
 			if parts == 0 {
 				continue
 			}
-			target.HealDamage(parts * HEAL_POWER)
+			deltas.addHeal(target, parts*HEAL_POWER)
 			actor.SetAction("heal", target.X, target.Y)
 
 		case IntentRangedHeal:
 			target := room.Entities[in.TargetID]
-			if target == nil || target.Type != TYPE_CREEP || target.Spawning || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
+			if target == nil || target.Type != TYPE_CREEP || target.Spawning || target.Hits <= 0 || ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
 				continue
 			}
 			parts := actor.CountActiveParts(HEAL)
 			if parts == 0 {
 				continue
 			}
-			target.HealDamage(parts * RANGED_HEAL_POWER)
+			deltas.addHeal(target, parts*RANGED_HEAL_POWER)
 			actor.SetAction("rangedHeal", target.X, target.Y)
 
 		case IntentSay:
@@ -530,7 +616,7 @@ func towerEffectPower(basePower, dist int) int {
 	return int(float64(basePower) * (1.0 - TOWER_FALLOFF*ratio))
 }
 
-func processTowers(w *World, intents []Intent) {
+func processTowers(w *World, intents []Intent, deltas *combatDeltas) {
 	// One action per tower per tick (last wins).
 	byTower := make(map[string]Intent, len(intents))
 	order := make([]string, 0, len(intents))
@@ -562,25 +648,27 @@ func processTowers(w *World, intents []Intent) {
 		dist := ChebyshevDist(tower.X, tower.Y, target.X, target.Y)
 		switch in.Type {
 		case IntentTowerAttack:
-			if target.HitsMax <= 0 {
+			if target.ID == tower.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) {
 				continue
 			}
 			tower.SubStore(RESOURCE_ENERGY, TOWER_ENERGY_COST)
-			target.TakeDamage(towerEffectPower(TOWER_POWER_ATTACK, dist))
+			if effective := resolveCombatTarget(w, room, tower.User, target); effective != nil {
+				deltas.addDamage(effective, towerEffectPower(TOWER_POWER_ATTACK, dist))
+			}
 			tower.SetAction("attack", target.X, target.Y)
 		case IntentTowerHeal:
-			if target.Type != TYPE_CREEP || target.Spawning {
+			if target.Type != TYPE_CREEP || target.Spawning || target.Hits <= 0 {
 				continue
 			}
 			tower.SubStore(RESOURCE_ENERGY, TOWER_ENERGY_COST)
-			target.HealDamage(towerEffectPower(TOWER_POWER_HEAL, dist))
+			deltas.addHeal(target, towerEffectPower(TOWER_POWER_HEAL, dist))
 			tower.SetAction("heal", target.X, target.Y)
 		case IntentTowerRepair:
-			if !target.IsStructure() || target.HitsMax <= 0 {
+			if !target.IsStructure() || target.HitsMax <= 0 || target.Hits <= 0 {
 				continue
 			}
 			tower.SubStore(RESOURCE_ENERGY, TOWER_ENERGY_COST)
-			target.HealDamage(towerEffectPower(TOWER_POWER_REPAIR, dist))
+			deltas.addHeal(target, towerEffectPower(TOWER_POWER_REPAIR, dist))
 			tower.SetAction("repair", target.X, target.Y)
 		}
 	}
@@ -676,7 +764,8 @@ func processRoomPassives(w *World, roomNames []string) {
 				if e.User != "" && e.Level > 0 {
 					checkControllerUpgrade(w, room, e)
 					if e.DowngradeTime > 0 && w.GameTime >= e.DowngradeTime {
-						ownerName := w.userNameLocked(e.User)
+						ownerID := e.User
+						ownerName := w.userNameLocked(ownerID)
 						e.Level--
 						if e.Level <= 0 {
 							w.recordEventLocked(room.Name, "danger", fmt.Sprintf("%s lost controller (RCL 0)", ownerName))
@@ -691,6 +780,7 @@ func processRoomPassives(w *World, roomNames []string) {
 							e.ProgressTotal = CONTROLLER_LEVELS[e.Level]
 							e.DowngradeTime = w.GameTime + int64(CONTROLLER_DOWNGRADE[e.Level])
 						}
+						updateExtensionCapacities(room, ownerID, e.Level)
 					}
 				}
 
@@ -754,6 +844,11 @@ func processRoomPassives(w *World, roomNames []string) {
 
 			// Remove destroyed structures.
 			if e.IsStructure() && e.HitsMax > 0 && e.Hits <= 0 {
+				if e.Type == STRUCTURE_SPAWN && e.SpawningInfo != nil {
+					// Remove orphaned in-progress spawning creep so its name is not permanently leaked.
+					delete(room.Entities, e.SpawningInfo.CreepID)
+					e.SpawningInfo = nil
+				}
 				if e.Type == STRUCTURE_SPAWN || e.Type == STRUCTURE_TOWER || e.Type == STRUCTURE_STORAGE || e.Type == STRUCTURE_EXTENSION {
 					label := e.Type
 					if e.Name != "" {
@@ -767,21 +862,32 @@ func processRoomPassives(w *World, roomNames []string) {
 	}
 }
 
-// applyCombatDamage blocks hostile damage under Safe Mode and redirects damage
-// to a protective friendly rampart on target's tile if present.
-func applyCombatDamage(w *World, room *Room, attackerUser string, target *Entity, dmg int) {
+// resolveCombatTarget enforces Safe Mode and redirects hostile damage to a covering
+// friendly rampart on target's tile if present. Returns nil when blocked by Safe Mode.
+func resolveCombatTarget(w *World, room *Room, attackerUser string, target *Entity) *Entity {
 	if ctrl := room.FindController(); ctrl != nil && ctrl.SafeMode > w.GameTime && ctrl.User != "" && attackerUser != ctrl.User && target.User == ctrl.User {
-		return
+		return nil
 	}
 	if target.Type != STRUCTURE_RAMPART && target.User != "" && target.User != attackerUser {
 		for _, e := range room.Entities {
 			if e.Type == STRUCTURE_RAMPART && e.X == target.X && e.Y == target.Y && e.User == target.User && e.Hits > 0 {
-				e.TakeDamage(dmg)
-				return
+				return e
 			}
 		}
 	}
-	target.TakeDamage(dmg)
+	return target
+}
+
+func updateExtensionCapacities(room *Room, ownerID string, rcl int) {
+	extCap := EXTENSION_ENERGY_CAPACITY[rcl]
+	for _, e := range room.Entities {
+		if e.Type == STRUCTURE_EXTENSION && e.User == ownerID {
+			if e.StoreCapacityResource == nil {
+				e.StoreCapacityResource = make(map[string]int)
+			}
+			e.StoreCapacityResource[RESOURCE_ENERGY] = extCap
+		}
+	}
 }
 
 func checkControllerUpgrade(w *World, room *Room, ctrl *Entity) {

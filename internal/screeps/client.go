@@ -228,9 +228,10 @@ func (c *Client) runSession(ctx context.Context) error {
 		return err
 	}
 
-	c.wsMu.Lock()
-	c.conn = conn
-	c.wsMu.Unlock()
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+	})
+	defer stop()
 
 	defer func() {
 		c.wsMu.Lock()
@@ -244,6 +245,11 @@ func (c *Client) runSession(ctx context.Context) error {
 	if err := conn.WriteMessage(websocket.TextMessage, []byte("auth "+token)); err != nil {
 		return err
 	}
+
+	c.wsMu.Lock()
+	c.conn = conn
+	c.wsMu.Unlock()
+
 	c.setStatus("Connected")
 
 	// Wait briefly for auth ok, then subscribe to current room.
@@ -513,45 +519,75 @@ func parseVisuals(raw string) []VisualOp {
 	return out
 }
 
+func deepCopyMap(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	cp := make(map[string]any, len(m))
+	for k, v := range m {
+		cp[k] = deepCopyValue(v)
+	}
+	return cp
+}
+
+func deepCopyValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		return deepCopyMap(val)
+	case []any:
+		if val == nil {
+			return nil
+		}
+		cp := make([]any, len(val))
+		for i, elem := range val {
+			cp[i] = deepCopyValue(elem)
+		}
+		return cp
+	default:
+		return v
+	}
+}
+
 func parseRoomObject(id string, raw map[string]any) RoomObject {
+	rawCopy := deepCopyMap(raw)
 	obj := RoomObject{
 		ID:  id,
-		Raw: raw,
+		Raw: rawCopy,
 	}
-	if v, ok := raw["type"].(string); ok {
+	if v, ok := rawCopy["type"].(string); ok {
 		obj.Type = v
 	}
-	if v, ok := raw["room"].(string); ok {
+	if v, ok := rawCopy["room"].(string); ok {
 		obj.Room = v
 	}
-	if v, ok := raw["x"].(float64); ok {
+	if v, ok := rawCopy["x"].(float64); ok {
 		obj.X = int(v)
 	}
-	if v, ok := raw["y"].(float64); ok {
+	if v, ok := rawCopy["y"].(float64); ok {
 		obj.Y = int(v)
 	}
-	if v, ok := raw["user"].(string); ok {
+	if v, ok := rawCopy["user"].(string); ok {
 		obj.User = v
 	}
-	if v, ok := raw["name"].(string); ok {
+	if v, ok := rawCopy["name"].(string); ok {
 		obj.Name = v
 	}
-	if v, ok := raw["hits"].(float64); ok {
+	if v, ok := rawCopy["hits"].(float64); ok {
 		obj.Hits = int(v)
 	}
-	if v, ok := raw["hitsMax"].(float64); ok {
+	if v, ok := rawCopy["hitsMax"].(float64); ok {
 		obj.HitsMax = int(v)
 	}
-	if v, ok := raw["level"].(float64); ok {
+	if v, ok := rawCopy["level"].(float64); ok {
 		obj.Level = int(v)
 	}
-	if v, ok := raw["energy"].(float64); ok {
+	if v, ok := rawCopy["energy"].(float64); ok {
 		obj.Energy = int(v)
 	}
-	if v, ok := raw["store"].(map[string]any); ok {
+	if v, ok := rawCopy["store"].(map[string]any); ok {
 		obj.Store = v
 	}
-	if v, ok := raw["spawning"].(map[string]any); ok {
+	if v, ok := rawCopy["spawning"].(map[string]any); ok {
 		obj.Spawning = v
 	}
 	return obj

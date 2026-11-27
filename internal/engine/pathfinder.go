@@ -166,7 +166,23 @@ func SearchPath(room *Room, startX, startY int, goals []Goal, opts PathOpts) Pat
 
 	// Minimum possible step cost for admissible heuristic.
 	minStepCost := int(plainCost)
+	if int(swampCost) < minStepCost {
+		minStepCost = int(swampCost)
+	}
 	if !opts.IgnoreRoads && minStepCost > 1 {
+		minStepCost = 1
+	}
+	if opts.CostMatrix != nil && minStepCost > 1 {
+		for i := 0; i < RoomSize*RoomSize; i++ {
+			if c := opts.CostMatrix.Bits[i]; c > 0 && c < 255 && int(c) < minStepCost {
+				minStepCost = int(c)
+				if minStepCost == 1 {
+					break
+				}
+			}
+		}
+	}
+	if minStepCost < 1 {
 		minStepCost = 1
 	}
 
@@ -229,7 +245,7 @@ func SearchPath(room *Room, startX, startY int, goals []Goal, opts PathOpts) Pat
 	gScore[startIdx] = 0
 	startH := heuristic(startX, startY)
 
-	manhattan := func(x, y int) int {
+	tieBreak := func(x, y int) int {
 		best := 1 << 30
 		for _, g := range goals {
 			d := abs(x-g.X) + abs(y-g.Y)
@@ -237,10 +253,13 @@ func SearchPath(room *Room, startX, startY int, goals []Goal, opts PathOpts) Pat
 				best = d
 			}
 		}
+		if opts.Flee {
+			return -best
+		}
 		return best
 	}
 
-	open := &astarHeap{{idx: startIdx, g: 0, f: startH, tie: manhattan(startX, startY)}}
+	open := &astarHeap{{idx: startIdx, g: 0, f: startH, tie: tieBreak(startX, startY)}}
 	heap.Init(open)
 
 	bestIdx := startIdx
@@ -288,7 +307,7 @@ func SearchPath(room *Room, startX, startY int, goals []Goal, opts PathOpts) Pat
 				gScore[nIdx] = ng
 				parent[nIdx] = cur.idx
 				nf := ng + heuristic(nx, ny)
-				heap.Push(open, astarNode{idx: nIdx, g: ng, f: nf, tie: manhattan(nx, ny)})
+				heap.Push(open, astarNode{idx: nIdx, g: ng, f: nf, tie: tieBreak(nx, ny)})
 			}
 		}
 	}
@@ -333,6 +352,13 @@ func reconstructPath(startIdx, endIdx int, parent []int) []PathStep {
 // FindDirection returns the next movement direction (1..8) from (fromX, fromY) toward (toX, toY),
 // or 0 if already at the destination (or adjacent to an impassable destination) or if no path exists.
 func FindDirection(room *Room, fromX, fromY, toX, toY int, ignoreCreeps bool) int {
+	return FindDirectionFor(room, fromX, fromY, toX, toY, ignoreCreeps, "")
+}
+
+// FindDirectionFor returns the next movement direction (1..8) from (fromX, fromY) toward (toX, toY)
+// for moverUser (respecting hostile Ramparts), or 0 if already at the destination (or adjacent to
+// an impassable destination) or if no path exists.
+func FindDirectionFor(room *Room, fromX, fromY, toX, toY int, ignoreCreeps bool, moverUser string) int {
 	if room == nil || !InBounds(fromX, fromY) || !InBounds(toX, toY) {
 		return 0
 	}
@@ -340,11 +366,12 @@ func FindDirection(room *Room, fromX, fromY, toX, toY int, ignoreCreeps bool) in
 		return 0
 	}
 	rng := 0
-	if !room.IsWalkable(toX, toY, ignoreCreeps) {
+	if !room.IsWalkableFor(toX, toY, moverUser, ignoreCreeps) {
 		rng = 1
 	}
 	res := SearchPath(room, fromX, fromY, []Goal{{X: toX, Y: toY, Range: rng}}, PathOpts{
 		IgnoreCreeps: ignoreCreeps,
+		MoverUser:    moverUser,
 	})
 	if len(res.Path) == 0 {
 		return 0

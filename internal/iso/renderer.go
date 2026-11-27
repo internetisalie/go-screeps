@@ -549,6 +549,22 @@ func hashWorldRooms(rooms []*worldRoom) uint64 {
 			mix(0)
 		}
 		mix(uint64(len(r.snap.Terrain)))
+		terr := r.snap.Terrain
+		i := 0
+		for ; i+8 <= len(terr); i += 8 {
+			v := uint64(terr[i]) |
+				uint64(terr[i+1])<<8 |
+				uint64(terr[i+2])<<16 |
+				uint64(terr[i+3])<<24 |
+				uint64(terr[i+4])<<32 |
+				uint64(terr[i+5])<<40 |
+				uint64(terr[i+6])<<48 |
+				uint64(terr[i+7])<<56
+			mix(v)
+		}
+		for ; i < len(terr); i++ {
+			mix(uint64(terr[i]))
+		}
 	}
 	return h
 }
@@ -589,6 +605,12 @@ type Painter struct {
 	startTime      time.Time
 	creepFacing    map[string]float64    // remembered world-space facing angle (radians) per creep/tower ID
 	creepLastPos   map[string][2]float32 // last world-space (gfx, gfy) per creep ID for movement heading
+}
+
+// ClearUnitTracking resets cached creep/tower facing and movement history (e.g. on room switch or sim reset).
+func (p *Painter) ClearUnitTracking() {
+	clear(p.creepFacing)
+	clear(p.creepLastPos)
 }
 
 func roomVisibleYaw(r *worldRoom, originX, originY, halfW, halfH, extMargin, cosY, sinY float32, sz geom.Size) bool {
@@ -740,6 +762,28 @@ func (p *Painter) Paint(cv *paint.Canvas, sz geom.Size) {
 		return
 	}
 	multiRoom := len(rooms) > 1
+
+	// Prune dead creep/tower IDs from facing & movement history maps so they don't grow unbounded.
+	if len(p.creepFacing) > 0 || len(p.creepLastPos) > 0 {
+		liveUnits := make(map[string]struct{}, len(p.creepFacing))
+		for _, r := range rooms {
+			for _, obj := range r.snap.Objects {
+				if obj.Type == "creep" || obj.Type == "powerCreep" || obj.Type == "tower" {
+					liveUnits[obj.ID] = struct{}{}
+				}
+			}
+		}
+		for id := range p.creepFacing {
+			if _, ok := liveUnits[id]; !ok {
+				delete(p.creepFacing, id)
+			}
+		}
+		for id := range p.creepLastPos {
+			if _, ok := liveUnits[id]; !ok {
+				delete(p.creepLastPos, id)
+			}
+		}
+	}
 
 	cosY, sinY := cam.YawCosSin()
 

@@ -39,6 +39,9 @@ func (vm *BotVM) LoadDir(dirPath string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("bot path %q is not a directory", absDir)
 	}
+	if realDir, err := filepath.EvalSymlinks(absDir); err == nil {
+		absDir = realDir
+	}
 
 	mtimes, err := scanDirModTimes(absDir)
 	if err != nil {
@@ -81,6 +84,7 @@ func (vm *BotVM) CheckReload() (bool, error) {
 }
 
 func (vm *BotVM) loadMain() error {
+	vm.requireCount = 0
 	data, err := vm.readBotFile("main.lua")
 	if err != nil {
 		return fmt.Errorf("load main.lua: %w", err)
@@ -90,10 +94,6 @@ func (vm *BotVM) loadMain() error {
 	if timeout < 2*time.Second {
 		timeout = 2 * time.Second
 	}
-	limitMs := uint64(timeout / time.Millisecond)
-	if limitMs == 0 {
-		limitMs = 2000
-	}
 
 	clos, err := vm.R.CompileAndLoadLuaChunk("main.lua", data, rt.TableValue(vm.R.GlobalEnv()))
 	if err != nil {
@@ -101,11 +101,7 @@ func (vm *BotVM) loadMain() error {
 	}
 
 	var retVal rt.Value
-	ctx, err := vm.R.MainThread().CallContext(rt.RuntimeContextDef{
-		HardLimits: rt.RuntimeResources{
-			Millis: limitMs,
-		},
-	}, func() error {
+	ctx, err := vm.R.MainThread().CallContext(vm.contextDef(timeout), func() error {
 		var callErr error
 		retVal, callErr = rt.Call1(vm.R.MainThread(), rt.FunctionValue(clos))
 		return callErr
@@ -182,10 +178,17 @@ func (vm *BotVM) luaRequire(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		return nil, fmt.Errorf("require(%q): %s", modName, err.Error())
 	}
 
+	if vm.requireCount >= maxRequiresPerTick {
+		return nil, fmt.Errorf("require(%q): too many module loads in one tick", modName)
+	}
+	vm.requireCount++
+	t.RequireCPU(5000)
+
 	data, err := vm.readBotFile(relPath)
 	if err != nil {
 		return nil, fmt.Errorf("require(%q): %s", modName, err.Error())
 	}
+	t.RequireSize(uintptr(len(data)))
 
 	clos, err := vm.R.CompileAndLoadLuaChunk(relPath, data, rt.TableValue(vm.R.GlobalEnv()))
 	if err != nil {
@@ -240,12 +243,25 @@ func (vm *BotVM) readBotFile(relPath string) ([]byte, error) {
 	}
 	if vm.dirPath != "" {
 		full := filepath.Join(vm.dirPath, filepath.FromSlash(relPath))
-		// Verify resolved path stays within vm.dirPath.
+		// Verify lexical path stays within vm.dirPath.
 		rel, err := filepath.Rel(vm.dirPath, full)
-		if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
 			return nil, fmt.Errorf("access denied outside bot directory")
 		}
-		return os.ReadFile(full)
+		// Resolve symlinks on both base directory and target file to block symlink traversal.
+		realDir, err := filepath.EvalSymlinks(vm.dirPath)
+		if err != nil {
+			return nil, fmt.Errorf("resolve bot directory: %w", err)
+		}
+		realFull, err := filepath.EvalSymlinks(full)
+		if err != nil {
+			return nil, err
+		}
+		realRel, err := filepath.Rel(realDir, realFull)
+		if err != nil || realRel == ".." || strings.HasPrefix(realRel, ".."+string(filepath.Separator)) || filepath.IsAbs(realRel) {
+			return nil, fmt.Errorf("access denied outside bot directory")
+		}
+		return os.ReadFile(realFull)
 	}
 	return nil, fmt.Errorf("no bot source configured")
 }

@@ -178,7 +178,7 @@ function CombatAgent.buildSkirmisherBody(budget)
         cost = cost + 50 -- reserve paired MOVE
     end
     cost = cost - (rangedCount * 50)
-    if cost + 60 <= budget and #body + rangedCount + 2 <= 22 then
+    if cost + (rangedCount * 50) + 60 <= budget and #body + rangedCount + 2 <= 22 then
         table.insert(body, 1, screeps.PART.TOUGH)
         cost = cost + 10
     end
@@ -426,6 +426,17 @@ function CombatAgent.updateIntel(room)
     if not room or not room.name then
         return
     end
+    local isMyRoom = (room.controller and room.controller.my)
+        or (#(room:find(screeps.FIND.MY_SPAWNS) or {}) > 0)
+    if isMyRoom then
+        if screeps.Memory.scoutedRooms then
+            screeps.Memory.scoutedRooms[room.name] = nil
+        end
+        if screeps.Memory.raidTarget == room.name then
+            screeps.Memory.raidTarget = nil
+        end
+        return
+    end
     if not screeps.Memory.scoutedRooms then
         screeps.Memory.scoutedRooms = {}
     end
@@ -460,7 +471,10 @@ function CombatAgent.updateIntel(room)
     local bestRoom = nil
     local bestScore = 0
     for rName, info in pairs(screeps.Memory.scoutedRooms) do
-        if info and info.hasHostiles and (info.score or 0) > bestScore then
+        local visRoom = screeps.Game.rooms and screeps.Game.rooms[rName]
+        local owned = visRoom and ((visRoom.controller and visRoom.controller.my)
+            or (#(visRoom:find(screeps.FIND.MY_SPAWNS) or {}) > 0))
+        if not owned and info and info.hasHostiles and (info.score or 0) > bestScore then
             bestScore = info.score
             bestRoom = rName
         end
@@ -519,7 +533,7 @@ function CombatAgent.inspectStagingSquad(room)
     local hasMedic = false
     local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, c in ipairs(myCreeps) do
-        if c.memory then
+        if not c.spawning and c.memory then
             local r = c.memory.role
             if (r == "brawler" or r == "skirmisher" or r == "medic") and c.memory.state ~= "raid" then
                 table.insert(staged, c)
@@ -734,8 +748,9 @@ function CombatAgent:handleRaidTransit()
     local homeRoom = mem.homeRoom or room.name
     mem.homeRoom = homeRoom
 
-    local targetRoom = screeps.Memory.raidTarget or mem.targetRoom
+    local targetRoom = screeps.Memory.raidTarget
     if not targetRoom then
+        mem.targetRoom = nil
         if room.name ~= homeRoom then
             self:moveAcrossExit(homeRoom, nil)
             return false
@@ -894,6 +909,10 @@ function CombatAgent:runDefender()
         self:moveAcrossExit(homeRoom, nil)
         return
     end
+    if CombatAgent.isOnEdge(creep.pos) then
+        self:stepOffEdge()
+        return
+    end
 
     local hostiles = room:find(screeps.FIND.HOSTILE_CREEPS) or {} ---@type Creep[]
     if #hostiles > 0 then
@@ -901,19 +920,29 @@ function CombatAgent:runDefender()
         local dist = creep.pos:getRangeTo(target)
         local hasMelee = CombatAgent.hasPart(creep, screeps.PART.ATTACK)
         local hasRanged = CombatAgent.hasPart(creep, screeps.PART.RANGED_ATTACK)
+        local chaseX = target.pos and math.max(1, math.min(48, target.pos.x)) or 25
+        local chaseY = target.pos and math.max(1, math.min(48, target.pos.y)) or 25
 
         if hasRanged and dist <= 3 then
             creep:rangedAttack(target)
         end
         if hasMelee then
             if creep:attack(target) == screeps.ERR.NOT_IN_RANGE then
-                creep:moveTo(target)
+                if target.pos and CombatAgent.isOnEdge(target.pos) then
+                    creep:moveTo(chaseX, chaseY)
+                else
+                    creep:moveTo(target)
+                end
             end
         elseif hasRanged then
             if dist <= 2 then
                 self:stepAwayFrom(target.pos)
             elseif dist > 3 then
-                creep:moveTo(target)
+                if target.pos and CombatAgent.isOnEdge(target.pos) then
+                    creep:moveTo(chaseX, chaseY)
+                else
+                    creep:moveTo(target)
+                end
             end
         end
         return
@@ -946,6 +975,7 @@ function CombatAgent:runScout()
     mem.homeRoom = homeRoom
 
     if room.name == homeRoom then
+        mem.exploreTicks = 0
         -- Pick next room to scout.
         if not mem.targetRoom and not mem.targetDir then
             local tRoom, tDir = CombatAgent.pickNextScoutTarget(room)
@@ -982,7 +1012,6 @@ function CombatAgent:runScout()
         end
     else
         -- Done scouting this room; return home to pick next adjacent room.
-        mem.exploreTicks = 0
         mem.targetRoom = nil
         mem.targetDir = nil
         self:moveAcrossExit(homeRoom, nil)

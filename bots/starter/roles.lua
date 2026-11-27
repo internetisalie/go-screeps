@@ -30,6 +30,7 @@ local EXIT_DIRS <const> = {
 }
 
 local SCOUT_INTEL_TTL <const> = 1500
+local HOSTILE_INTEL_TTL <const> = 250
 
 ---Construct a CreepAgent bound to a specific owned Creep.
 ---@param creep Creep
@@ -40,6 +41,24 @@ function CreepAgent.new(creep)
         room = creep.room,
         memory = creep.memory,
     }, CreepAgent)
+end
+
+---Return true if the creep has at least one active (hits > 0) body part of `partType`.
+---@param creep? Creep
+---@param partType BodyPartType
+---@return boolean
+function CreepAgent.hasActivePart(creep, partType)
+    if not creep or not creep.body then
+        return false
+    end
+    for _, part in ipairs(creep.body) do
+        local pt = (type(part) == "table" and part.type) or part
+        local hits = (type(part) == "table" and part.hits) or nil
+        if pt == partType and (hits == nil or hits > 0) then
+            return true
+        end
+    end
+    return false
 end
 
 ---@param val number
@@ -284,7 +303,8 @@ function CreepAgent.pickNextScoutRoom(homeRoomName)
     for _, rName in ipairs(candidates) do
         local info = intelMap[rName]
         local seen = (info and info.lastSeen) or -9999
-        if (not info) or (now - seen > SCOUT_INTEL_TTL) then
+        local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
+        if (not info) or (now - seen > ttl) then
             if seen < oldestSeen then
                 oldestSeen = seen
                 bestRoom = rName
@@ -304,7 +324,7 @@ function CreepAgent.inspectAssaultWave(room)
     local hasHealer = false
     local myCreeps = room:find(screeps.FIND.MY_CREEPS) or {} ---@type Creep[]
     for _, c in ipairs(myCreeps) do
-        if c.memory then
+        if not c.spawning and c.memory then
             local r = c.memory.role
             if (r == "assault" or r == "healer") and c.memory.state ~= "assault" then
                 table.insert(staged, c)
@@ -1032,19 +1052,21 @@ function CreepAgent:defender()
         if target then
             self:drawTargetLine(target, "#ef5350")
             local range = creep.pos:getRangeTo(target)
+            local hasMelee = CreepAgent.hasActivePart(creep, screeps.PART.ATTACK)
+            local hasRanged = CreepAgent.hasActivePart(creep, screeps.PART.RANGED_ATTACK)
 
-            if creep.rangedAttack and range <= 3 then
+            if hasRanged and range <= 3 then
                 creep:rangedAttack(target)
             end
 
             -- Rampart-aware positioning: hold or step onto a nearby rampart in weapon range.
-            local engageRange = (creep.attack and 1) or 3
+            local engageRange = (hasMelee and 1) or 3
             local rampart = self:findCombatRampart(target, engageRange)
             if rampart and rampart.pos then
                 if creep.pos.x ~= rampart.pos.x or creep.pos.y ~= rampart.pos.y then
                     creep:moveTo(rampart)
                 end
-                if creep.attack and range <= 1 then
+                if hasMelee and range <= 1 then
                     creep:attack(target)
                 end
                 return
@@ -1054,7 +1076,7 @@ function CreepAgent:defender()
             local chaseX = CreepAgent.clamp(target.pos.x, 1, 48)
             local chaseY = CreepAgent.clamp(target.pos.y, 1, 48)
 
-            if creep.attack then
+            if hasMelee then
                 if creep:attack(target) == screeps.ERR.NOT_IN_RANGE then
                     if CreepAgent.isOnEdge(target.pos) then
                         creep:moveTo(chaseX, chaseY)
@@ -1062,7 +1084,7 @@ function CreepAgent:defender()
                         creep:moveTo(target)
                     end
                 end
-            elseif range > 3 then
+            elseif hasRanged and range > 3 then
                 if CreepAgent.isOnEdge(target.pos) then
                     creep:moveTo(chaseX, chaseY)
                 else
@@ -1106,7 +1128,8 @@ function CreepAgent:scout()
         if targetRoom then
             local info = screeps.Memory and screeps.Memory.roomIntel and screeps.Memory.roomIntel[targetRoom]
             local now = screeps.Game.time or 0
-            if info and info.lastSeen and (now - info.lastSeen) <= SCOUT_INTEL_TTL then
+            local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
+            if info and info.lastSeen and (now - info.lastSeen) <= ttl then
                 targetRoom = nil
             end
         end
@@ -1212,11 +1235,13 @@ function CreepAgent:remoteHarvester()
         self.memory.room = homeRoom
     end
 
-    local targetRoom = self.memory.targetRoom
-    if not targetRoom and screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom] then
-        targetRoom = screeps.Memory.rooms[homeRoom].remoteRoom
-        self.memory.targetRoom = targetRoom
+    local rmem = screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom]
+    if room.name == homeRoom and rmem then
+        self.memory.targetRoom = rmem.remoteRoom
+    elseif not self.memory.targetRoom and rmem then
+        self.memory.targetRoom = rmem.remoteRoom
     end
+    local targetRoom = self.memory.targetRoom
 
     -- Flee back home if hostiles appear in any non-home room.
     if room.name ~= homeRoom then
@@ -1314,11 +1339,13 @@ function CreepAgent:remoteHauler()
         self.memory.room = homeRoom
     end
 
-    local targetRoom = self.memory.targetRoom
-    if not targetRoom and screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom] then
-        targetRoom = screeps.Memory.rooms[homeRoom].remoteRoom
-        self.memory.targetRoom = targetRoom
+    local rmem = screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom]
+    if room.name == homeRoom and rmem then
+        self.memory.targetRoom = rmem.remoteRoom
+    elseif not self.memory.targetRoom and rmem then
+        self.memory.targetRoom = rmem.remoteRoom
     end
+    local targetRoom = self.memory.targetRoom
 
     self:updateWorkingState()
 
@@ -1481,9 +1508,12 @@ function CreepAgent:handleAssaultTransit()
     local room = self.room
     local homeRoom = (self.memory and self.memory.room) or (room and room.name)
     local rmem = homeRoom and screeps.Memory and screeps.Memory.rooms and screeps.Memory.rooms[homeRoom]
-    local targetRoom = (self.memory and self.memory.targetRoom) or (rmem and rmem.attackTarget)
+    local targetRoom = rmem and rmem.attackTarget
 
     if not targetRoom then
+        if self.memory then
+            self.memory.targetRoom = nil
+        end
         if homeRoom and room and room.name ~= homeRoom then
             self:moveAcrossExit(homeRoom, nil)
             return false
@@ -1755,7 +1785,7 @@ end
 ---Static dispatcher for running any creep according to creep.memory.role.
 ---@param creep? Creep
 function CreepAgent.run(creep)
-    if not creep or not creep.memory then
+    if not creep or creep.spawning or not creep.memory then
         return
     end
     if creep.room then

@@ -421,7 +421,9 @@ float3 calcNormalAndCurv(float3 p, float d0, float kind, float energy, float fla
     float d3 = mapScene(p + e.yxy, kind, energy, flags, t).x;
     float d4 = mapScene(p + e.xxx, kind, energy, flags, t).x;
     curv = (d1 + d2 + d3 + d4 - 4.0 * d0) / (h * 4.0);
-    return normalize(e.xyy * d1 + e.yyx * d2 + e.yxy * d3 + e.xxx * d4);
+    float3 g = e.xyy * d1 + e.yyx * d2 + e.yxy * d3 + e.xxx * d4;
+    float len = length(g);
+    return len > 1e-6 ? g / len : float3(0.0, 1.0, 0.0);
 }
 
 float calcSoftShadow(float3 ro, float3 rd, float kind, float energy, float flags, float t) {
@@ -611,7 +613,7 @@ float4 shade(ShaderInput i) {
     float sh = calcSoftShadow(pos + N * 0.015, L, kind, energy, flags, i.time);
     float ndl = max(dot(N, L), 0.0);
     float ndlFill = max(dot(N, Lfill), 0.0);
-    float ndv = max(dot(N, V), 0.0);
+    float ndv = saturate(dot(N, V));
     float ndh = max(dot(N, H), 0.0);
 
     // Subtle convex edge catchlight & crisp concave crevice darkening
@@ -692,7 +694,7 @@ float4 shade(ShaderInput i) {
                        float3(0.20, 0.94, 1.0) * (aaCyn * 0.60);
     }
 
-    float rim = pow(1.0 - ndv, 3.2) * (0.28 * (1.0 - roughness * 0.45)) * (0.45 + 0.55 * max(N.y, 0.0));
+    float rim = pow(max(1.0 - ndv, 0.0), 3.2) * (0.28 * (1.0 - roughness * 0.45)) * (0.45 + 0.55 * max(N.y, 0.0));
     float3 lit = diffuse + specCol + skyCol * rim + bounce + emissiveCol;
 
     // Ground contact AO fade at y=0 (gentle so base faces don't crush to black)

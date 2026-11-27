@@ -102,6 +102,16 @@ func asFloat(v rt.Value) (float64, bool) {
 	}
 }
 
+func clampUint8(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
+}
+
 func checkInt(c *rt.GoCont, n int) (int, error) {
 	v := argAt(c, n)
 	if f, ok := rt.ToFloat(v); ok {
@@ -398,7 +408,7 @@ func (vm *BotVM) initMetatables() {
 		"isNearTo":           {vm.posIsNearTo, 3},
 		"inRangeTo":          {vm.posInRangeTo, 4},
 		"isEqualTo":          {vm.posIsEqualTo, 3},
-		"findClosestByRange": {vm.posFindClosestByRange, 2},
+		"findClosestByRange": {vm.posFindClosestByRange, 3},
 	})
 
 	vm.terrainMT = makeMT(map[string]methodSpec{
@@ -472,6 +482,8 @@ func (vm *BotVM) buildPathFinder() *rt.Table {
 	pf := rt.NewTable()
 
 	newCM := vm.newGoFunc("PathFinder.CostMatrix", func(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
+		t.RequireSize(engine.RoomSize * engine.RoomSize)
+		t.RequireCPU(250)
 		ud := rt.NewUserData(engine.NewCostMatrix(), vm.costMatMT)
 		return c.PushingNext1(t.Runtime, rt.UserDataValue(ud)), nil
 	}, 1, false)
@@ -493,6 +505,11 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 	vm.roomCache = make(map[string]*rt.Table, 8)
 	vm.storeMeta = make(map[*rt.Table]storeRef, 64)
 	vm.entityRoom = make(map[string]string, 128)
+	vm.visibleRooms = make(map[string]bool, 8)
+	vm.roomMeta = make(map[*rt.Table]string, 8)
+	vm.visualMeta = make(map[*rt.Table]string, 8)
+	vm.visualCount = 0
+	vm.requireCount = 0
 
 	game := rt.NewTable()
 	roomsTbl := rt.NewTable()
@@ -517,6 +534,9 @@ func (vm *BotVM) refreshGame(world *engine.World) {
 		}
 	}
 	sort.Strings(visibleRooms)
+	for _, rName := range visibleRooms {
+		vm.visibleRooms[rName] = true
+	}
 
 	type entitySnap struct {
 		id       string
@@ -708,7 +728,33 @@ func (vm *BotVM) newRoomVisual(roomName string) *rt.Table {
 	t := rt.NewTableWithCapacity(0, 1)
 	tblSet(t, "roomName", rt.StringValue(roomName))
 	t.SetMetatable(vm.visualMT)
+	if vm.visualMeta == nil {
+		vm.visualMeta = make(map[*rt.Table]string, 8)
+	}
+	vm.visualMeta[t] = roomName
 	return t
+}
+
+func (vm *BotVM) roomNameOf(self *rt.Table) (string, bool) {
+	if rn, ok := vm.roomMeta[self]; ok && vm.visibleRooms[rn] {
+		return rn, true
+	}
+	return "", false
+}
+
+func (vm *BotVM) visualRoomNameOf(self *rt.Table) (string, bool) {
+	if rn, ok := vm.visualMeta[self]; ok && vm.visibleRooms[rn] {
+		return rn, true
+	}
+	return "", false
+}
+
+func (vm *BotVM) addVisualIfAllowed(roomName string, op screeps.VisualOp) {
+	if vm.world == nil || !vm.visibleRooms[roomName] || vm.visualCount >= maxVisualsPerTick {
+		return
+	}
+	vm.visualCount++
+	vm.world.AddVisual(roomName, op)
 }
 
 func (vm *BotVM) newRoomTerrain(roomName string) rt.Value {
@@ -766,6 +812,10 @@ func (vm *BotVM) wrapRoomByName(roomName string) *rt.Table {
 	t := rt.NewTable()
 	// Cache immediately to break room <-> controller reference cycles.
 	vm.roomCache[roomName] = t
+	if vm.roomMeta == nil {
+		vm.roomMeta = make(map[*rt.Table]string, 8)
+	}
+	vm.roomMeta[t] = roomName
 
 	tblSet(t, "name", rt.StringValue(roomName))
 	tblSet(t, "energyAvailable", rt.IntValue(int64(energyAvail)))
@@ -792,12 +842,17 @@ func (vm *BotVM) wrapEntityByID(id string) *rt.Table {
 	vm.world.RLock()
 	var e *engine.Entity
 	if rn, ok := vm.entityRoom[id]; ok {
-		if r := vm.world.Rooms[rn]; r != nil {
-			e = r.Entities[id]
+		if vm.visibleRooms[rn] {
+			if r := vm.world.Rooms[rn]; r != nil {
+				e = r.Entities[id]
+			}
 		}
 	}
 	if e == nil {
-		for _, r := range vm.world.Rooms {
+		for rName, r := range vm.world.Rooms {
+			if !vm.visibleRooms[rName] {
+				continue
+			}
 			if found, ok := r.Entities[id]; ok {
 				e = found
 				if vm.entityRoom != nil {
@@ -1178,8 +1233,16 @@ func (vm *BotVM) posFindClosestByRange(t *rt.Thread, c *rt.GoCont) (rt.Cont, err
 	if !ok1 {
 		return c.PushingNext1(t.Runtime, rt.NilValue), nil
 	}
-	list, ok := argAt(c, 1).TryTable()
-	if !ok {
+	var list *rt.Table
+	if tbl, ok := argAt(c, 1).TryTable(); ok {
+		list = tbl
+	} else if findConst, ok := asInt(argAt(c, 1)); ok && r1 != "" && vm.visibleRooms[r1] {
+		var err error
+		list, err = vm.findInRoom(t, r1, findConst, argAt(c, 2))
+		if err != nil {
+			return nil, err
+		}
+	} else {
 		return c.PushingNext1(t.Runtime, rt.NilValue), nil
 	}
 
@@ -1349,7 +1412,10 @@ func (vm *BotVM) visualCircle(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "roomName").TryString()
+	roomName, ok := vm.visualRoomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
+	}
 	var x, y float32
 	var styleVal rt.Value
 	if argAt(c, 1).Type() == rt.TableType {
@@ -1369,11 +1435,9 @@ func (vm *BotVM) visualCircle(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		styleVal = argAt(c, 3)
 	}
 	r, fill, col, opac, sw := parseVisualStyle(styleVal)
-	if vm.world != nil {
-		vm.world.AddVisual(roomName, screeps.VisualOp{
-			Type: "c", X: x, Y: y, R: r, Fill: fill, Col: col, Opac: opac, SW: sw,
-		})
-	}
+	vm.addVisualIfAllowed(roomName, screeps.VisualOp{
+		Type: "c", X: x, Y: y, R: r, Fill: fill, Col: col, Opac: opac, SW: sw,
+	})
 	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
@@ -1382,7 +1446,10 @@ func (vm *BotVM) visualLine(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "roomName").TryString()
+	roomName, ok := vm.visualRoomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
+	}
 	var x1, y1, x2, y2 float32
 	var styleVal rt.Value
 	if argAt(c, 1).Type() == rt.TableType {
@@ -1411,11 +1478,9 @@ func (vm *BotVM) visualLine(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		styleVal = argAt(c, 5)
 	}
 	_, _, col, opac, sw := parseVisualStyle(styleVal)
-	if vm.world != nil {
-		vm.world.AddVisual(roomName, screeps.VisualOp{
-			Type: "l", X: x1, Y: y1, X2: x2, Y2: y2, Col: col, Opac: opac, SW: sw,
-		})
-	}
+	vm.addVisualIfAllowed(roomName, screeps.VisualOp{
+		Type: "l", X: x1, Y: y1, X2: x2, Y2: y2, Col: col, Opac: opac, SW: sw,
+	})
 	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
@@ -1424,7 +1489,10 @@ func (vm *BotVM) visualRect(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "roomName").TryString()
+	roomName, ok := vm.visualRoomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
+	}
 	var x, y, w, h float32
 	var styleVal rt.Value
 	if argAt(c, 1).Type() == rt.TableType {
@@ -1461,11 +1529,9 @@ func (vm *BotVM) visualRect(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		styleVal = argAt(c, 5)
 	}
 	_, fill, col, opac, sw := parseVisualStyle(styleVal)
-	if vm.world != nil {
-		vm.world.AddVisual(roomName, screeps.VisualOp{
-			Type: "r", X: x, Y: y, W: w, H: h, Fill: fill, Col: col, Opac: opac, SW: sw,
-		})
-	}
+	vm.addVisualIfAllowed(roomName, screeps.VisualOp{
+		Type: "r", X: x, Y: y, W: w, H: h, Fill: fill, Col: col, Opac: opac, SW: sw,
+	})
 	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
@@ -1474,14 +1540,20 @@ func (vm *BotVM) visualPoly(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "roomName").TryString()
+	roomName, ok := vm.visualRoomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
+	}
 	ptsTbl, err := checkTable(c, 1)
 	if err != nil {
 		return nil, err
 	}
 	styleVal := argAt(c, 2)
-	var pts [][2]float32
 	n := int(ptsTbl.Len())
+	if n > maxVisualPolyPoints {
+		n = maxVisualPolyPoints
+	}
+	pts := make([][2]float32, 0, n)
 	for i := 1; i <= n; i++ {
 		item := tblGetInt(ptsTbl, i)
 		if pair, ok := item.TryTable(); ok {
@@ -1495,11 +1567,9 @@ func (vm *BotVM) visualPoly(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		}
 	}
 	_, fill, col, opac, sw := parseVisualStyle(styleVal)
-	if vm.world != nil {
-		vm.world.AddVisual(roomName, screeps.VisualOp{
-			Type: "p", Pts: pts, Fill: fill, Col: col, Opac: opac, SW: sw,
-		})
-	}
+	vm.addVisualIfAllowed(roomName, screeps.VisualOp{
+		Type: "p", Pts: pts, Fill: fill, Col: col, Opac: opac, SW: sw,
+	})
 	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
@@ -1508,10 +1578,16 @@ func (vm *BotVM) visualText(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "roomName").TryString()
+	roomName, ok := vm.visualRoomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
+	}
 	text, err := checkString(c, 1)
 	if err != nil {
 		return nil, err
+	}
+	if len(text) > maxLogLineLen {
+		text = text[:maxLogLineLen]
 	}
 	var x, y float32
 	var styleVal rt.Value
@@ -1532,11 +1608,9 @@ func (vm *BotVM) visualText(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		styleVal = argAt(c, 4)
 	}
 	_, _, col, opac, _ := parseVisualStyle(styleVal)
-	if vm.world != nil {
-		vm.world.AddVisual(roomName, screeps.VisualOp{
-			Type: "t", Text: text, X: x, Y: y, Col: col, Opac: opac,
-		})
-	}
+	vm.addVisualIfAllowed(roomName, screeps.VisualOp{
+		Type: "t", Text: text, X: x, Y: y, Col: col, Opac: opac,
+	})
 	return c.PushingNext1(t.Runtime, rt.TableValue(self)), nil
 }
 
@@ -1551,13 +1625,23 @@ func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	optsVal := argAt(c, 2)
-	roomName, _ := tblGet(self, "name").TryString()
-
-	resTbl := rt.NewTable()
-	if vm.world == nil {
-		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
+	roomName, ok := vm.roomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(rt.NewTable())), nil
 	}
+	resTbl, err := vm.findInRoom(t, roomName, findConst, argAt(c, 2))
+	if err != nil {
+		return nil, err
+	}
+	return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
+}
+
+func (vm *BotVM) findInRoom(t *rt.Thread, roomName string, findConst int, optsVal rt.Value) (*rt.Table, error) {
+	resTbl := rt.NewTable()
+	if vm.world == nil || !vm.visibleRooms[roomName] {
+		return resTbl, nil
+	}
+	t.RequireCPU(50)
 
 	// Exit finds return RoomPosition tables.
 	if findConst == engine.FIND_EXIT_TOP || findConst == engine.FIND_EXIT_RIGHT ||
@@ -1608,7 +1692,7 @@ func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		for i, coord := range coords {
 			tblSetInt(resTbl, i+1, rt.TableValue(vm.newRoomPosition(coord[0], coord[1], roomName)))
 		}
-		return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
+		return resTbl, nil
 	}
 
 	vm.world.RLock()
@@ -1659,6 +1743,7 @@ func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	vm.world.RUnlock()
 
 	sort.Strings(ids)
+	t.RequireCPU(uint64(len(ids)) * 2)
 
 	var filterFn rt.Value
 	if optsTbl, ok := optsVal.TryTable(); ok {
@@ -1677,7 +1762,7 @@ func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		if !filterFn.IsNil() {
 			keep, err := rt.Call1(t, filterFn, objVal)
 			if err != nil {
-				continue
+				return nil, err
 			}
 			if !rt.Truth(keep) {
 				continue
@@ -1687,7 +1772,7 @@ func (vm *BotVM) roomFind(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		idx++
 	}
 
-	return c.PushingNext1(t.Runtime, rt.TableValue(resTbl)), nil
+	return resTbl, nil
 }
 
 func (vm *BotVM) roomCreateConstructionSite(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
@@ -1695,16 +1780,16 @@ func (vm *BotVM) roomCreateConstructionSite(t *rt.Thread, c *rt.GoCont) (rt.Cont
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "name").TryString()
-	if vm.world == nil {
+	roomName, ok := vm.roomNameOf(self)
+	if !ok || vm.world == nil {
 		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 	}
 	var x, y int
 	var structType string
 	if argAt(c, 1).Type() == rt.TableType {
-		var ok bool
-		x, y, _, ok = extractPos(argAt(c, 1))
-		if !ok {
+		var okPos bool
+		x, y, _, okPos = extractPos(argAt(c, 1))
+		if !okPos {
 			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
 		}
 		structType, err = checkString(c, 2)
@@ -1722,7 +1807,7 @@ func (vm *BotVM) roomCreateConstructionSite(t *rt.Thread, c *rt.GoCont) (rt.Cont
 			return nil, err
 		}
 	}
-	_, code := vm.world.CreateConstructionSite(vm.UserID, roomName, x, y, structType)
+	code := vm.world.QueueCreateConstructionSite(vm.UserID, roomName, x, y, structType)
 	return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 }
 
@@ -1731,7 +1816,12 @@ func (vm *BotVM) roomGetTerrain(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "name").TryString()
+	roomName, ok := vm.roomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.NilValue), nil
+	}
+	t.RequireSize(engine.RoomSize * engine.RoomSize)
+	t.RequireCPU(250)
 	return c.PushingNext1(t.Runtime, vm.newRoomTerrain(roomName)), nil
 }
 
@@ -1740,7 +1830,10 @@ func (vm *BotVM) roomFindExitTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	fromName, _ := tblGet(self, "name").TryString()
+	fromName, ok := vm.roomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
+	}
 	target := strings.ToUpper(strings.TrimSpace(optString(c, 1, "")))
 	if target == "" || vm.world == nil {
 		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
@@ -1779,7 +1872,10 @@ func (vm *BotVM) roomLookForAt(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
-	roomName, _ := tblGet(self, "name").TryString()
+	roomName, ok := vm.roomNameOf(self)
+	if !ok {
+		return c.PushingNext1(t.Runtime, rt.TableValue(rt.NewTable())), nil
+	}
 	lookType, err := checkString(c, 1)
 	if err != nil {
 		return nil, err
@@ -1841,8 +1937,10 @@ func (vm *BotVM) roomLookForAt(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 				match = e.Type == engine.TYPE_MINERAL
 			case "constructionSite":
 				match = e.Type == engine.TYPE_CONSTRUCTION_SITE
-			case "resource", "energy":
+			case "resource":
 				match = e.Type == engine.TYPE_RESOURCE
+			case "energy":
+				match = e.Type == engine.TYPE_RESOURCE && e.ResourceType == engine.RESOURCE_ENERGY
 			case "tombstone":
 				match = e.Type == engine.TYPE_TOMBSTONE
 			}
@@ -1887,6 +1985,7 @@ func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	}
 
 	var tx, ty int
+	var tr string
 	var optsVal rt.Value
 	if isNumber(argAt(c, 1)) {
 		var err error
@@ -1899,7 +1998,7 @@ func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		optsVal = argAt(c, 3)
 	} else {
 		var okPos bool
-		tx, ty, _, okPos = extractPos(argAt(c, 1))
+		tx, ty, tr, okPos = extractPos(argAt(c, 1))
 		if !okPos {
 			return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_TARGET))), nil
 		}
@@ -1919,13 +2018,16 @@ func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 			pathOpts.IgnoreRoads = rt.Truth(v)
 		}
 		if v, ok := asInt(tblGet(optsTbl, "maxOps")); ok {
+			if v > maxPathFinderOps {
+				v = maxPathFinderOps
+			}
 			pathOpts.MaxOps = v
 		}
 		if v, ok := asInt(tblGet(optsTbl, "plainCost")); ok {
-			pathOpts.PlainCost = uint8(v)
+			pathOpts.PlainCost = clampUint8(v)
 		}
 		if v, ok := asInt(tblGet(optsTbl, "swampCost")); ok {
-			pathOpts.SwampCost = uint8(v)
+			pathOpts.SwampCost = clampUint8(v)
 		}
 		if v, ok := asInt(tblGet(optsTbl, "range")); ok {
 			hasRange = true
@@ -1933,6 +2035,7 @@ func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		}
 	}
 
+	t.RequireCPU(500)
 	vm.world.RLock()
 	var actor *engine.Entity
 	var room *engine.Room
@@ -1942,6 +2045,10 @@ func (vm *BotVM) creepMoveTo(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 			room = r
 			break
 		}
+	}
+	if actor == nil || room == nil || (tr != "" && strings.ToUpper(strings.TrimSpace(tr)) != room.Name) {
+		vm.world.RUnlock()
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_NO_PATH))), nil
 	}
 	if actor == nil || room == nil {
 		vm.world.RUnlock()
@@ -2112,6 +2219,9 @@ func (vm *BotVM) spawnCreep(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	optsVal := argAt(c, 3)
 
 	n := int(bodyTbl.Len())
+	if n <= 0 || n > maxCreepBodyParts {
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(engine.ERR_INVALID_ARGS))), nil
+	}
 	body := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
 		if s, ok := tblGetInt(bodyTbl, i).TryString(); ok {
@@ -2121,18 +2231,30 @@ func (vm *BotVM) spawnCreep(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 
 	var dirs []int
 	var memTbl *rt.Table
+	dryRun := false
 	if optsTbl, ok := optsVal.TryTable(); ok {
 		if m, ok := tblGet(optsTbl, "memory").TryTable(); ok {
 			memTbl = m
 		}
+		if d := tblGet(optsTbl, "dryRun"); !d.IsNil() {
+			dryRun = rt.Truth(d)
+		}
 		if dTbl, ok := tblGet(optsTbl, "directions").TryTable(); ok {
 			dn := int(dTbl.Len())
+			if dn > 8 {
+				dn = 8
+			}
 			for i := 1; i <= dn; i++ {
 				if d, ok := asInt(tblGetInt(dTbl, i)); ok {
 					dirs = append(dirs, d)
 				}
 			}
 		}
+	}
+
+	if dryRun {
+		code := vm.world.ValidateSpawnCreep(vm.UserID, spawnID, body, name, dirs)
+		return c.PushingNext1(t.Runtime, rt.IntValue(int64(code))), nil
 	}
 
 	code := vm.world.QueueIntent(vm.UserID, engine.Intent{
@@ -2250,13 +2372,14 @@ func (vm *BotVM) costMatrixClone(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if err != nil {
 		return nil, err
 	}
+	t.RequireSize(engine.RoomSize * engine.RoomSize)
+	t.RequireCPU(250)
 	ud := rt.NewUserData(cm.Clone(), vm.costMatMT)
 	return c.PushingNext1(t.Runtime, rt.UserDataValue(ud)), nil
 }
 
 func (vm *BotVM) pathFinderSearch(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
-	ox, oy, roomName, ok := extractPos(argAt(c, 0))
-	if !ok || vm.world == nil {
+	incompleteResult := func() (rt.Cont, error) {
 		res := rt.NewTable()
 		tblSet(res, "path", rt.TableValue(rt.NewTable()))
 		tblSet(res, "ops", rt.IntValue(0))
@@ -2265,14 +2388,26 @@ func (vm *BotVM) pathFinderSearch(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 		return c.PushingNext1(t.Runtime, rt.TableValue(res)), nil
 	}
 
+	ox, oy, roomName, ok := extractPos(argAt(c, 0))
+	if !ok || vm.world == nil {
+		return incompleteResult()
+	}
+	normRoom := strings.ToUpper(strings.TrimSpace(roomName))
+
 	var goals []engine.Goal
 	parseGoal := func(v rt.Value) {
+		if len(goals) >= maxPathFinderGoals {
+			return
+		}
 		tbl, ok := v.TryTable()
 		if !ok {
 			return
 		}
-		gx, gy, _, okPos := extractPos(v)
+		gx, gy, gr, okPos := extractPos(v)
 		if !okPos {
+			return
+		}
+		if gr != "" && strings.ToUpper(strings.TrimSpace(gr)) != normRoom {
 			return
 		}
 		rng := 0
@@ -2286,6 +2421,9 @@ func (vm *BotVM) pathFinderSearch(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	if gTbl, ok := goalArg.TryTable(); ok {
 		gLen := int(gTbl.Len())
 		if gLen > 0 {
+			if gLen > maxPathFinderGoals {
+				gLen = maxPathFinderGoals
+			}
 			for i := 1; i <= gLen; i++ {
 				parseGoal(tblGetInt(gTbl, i))
 			}
@@ -2299,32 +2437,42 @@ func (vm *BotVM) pathFinderSearch(t *rt.Thread, c *rt.GoCont) (rt.Cont, error) {
 	}
 	if optsTbl, ok := argAt(c, 2).TryTable(); ok {
 		if v, ok := asInt(tblGet(optsTbl, "plainCost")); ok {
-			opts.PlainCost = uint8(v)
+			opts.PlainCost = clampUint8(v)
 		}
 		if v, ok := asInt(tblGet(optsTbl, "swampCost")); ok {
-			opts.SwampCost = uint8(v)
+			opts.SwampCost = clampUint8(v)
 		}
 		if v, ok := asInt(tblGet(optsTbl, "maxOps")); ok {
+			if v > maxPathFinderOps {
+				v = maxPathFinderOps
+			}
 			opts.MaxOps = v
 		}
 		if v := tblGet(optsTbl, "flee"); !v.IsNil() {
 			opts.Flee = rt.Truth(v)
 		}
 		if cb := tblGet(optsTbl, "roomCallback"); cb.Type() == rt.FunctionType {
-			if ret, err := rt.Call1(t, cb, rt.StringValue(roomName)); err == nil {
-				if ud, ok := ret.TryUserData(); ok {
-					if cm, ok := ud.Value().(*engine.CostMatrix); ok {
-						opts.CostMatrix = cm
-					}
+			ret, err := rt.Call1(t, cb, rt.StringValue(roomName))
+			if err != nil {
+				return nil, err
+			}
+			if ret == rt.BoolValue(false) {
+				return incompleteResult()
+			}
+			if ud, ok := ret.TryUserData(); ok {
+				if cm, ok := ud.Value().(*engine.CostMatrix); ok {
+					opts.CostMatrix = cm
 				}
 			}
 		}
 	}
 
+	t.RequireCPU(500)
 	vm.world.RLock()
-	room := vm.world.Rooms[strings.ToUpper(strings.TrimSpace(roomName))]
+	room := vm.world.Rooms[normRoom]
 	pathRes := engine.SearchPath(room, ox, oy, goals, opts)
 	vm.world.RUnlock()
+	t.RequireCPU(uint64(pathRes.Ops) * 2)
 
 	pathTbl := rt.NewTable()
 	for i, step := range pathRes.Path {

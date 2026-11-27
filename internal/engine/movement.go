@@ -117,6 +117,7 @@ func resolveMovement(w *World, moveIntents []Intent) {
 	sort.Strings(roomNames)
 
 	movedCreeps := make(map[string]bool)
+	prevPos := make(map[string][2]int)
 
 	for _, rName := range roomNames {
 		room := w.Rooms[rName]
@@ -205,6 +206,7 @@ func resolveMovement(w *World, moveIntents []Intent) {
 				continue
 			}
 			c := room.Entities[id]
+			prevPos[id] = [2]int{c.X, c.Y}
 			nx, ny := dest%RoomSize, dest/RoomSize
 			c.X = nx
 			c.Y = ny
@@ -230,15 +232,23 @@ func resolveMovement(w *World, moveIntents []Intent) {
 		}
 	}
 
-	// Cross-room exit transitions: if a creep moved onto an edge exit tile (0 or 49)
-	// and the adjacent room exists with a walkable entry tile, transfer the creep across.
+	// Cross-room exit transitions: if a creep stepped onto an edge exit tile (0 or 49)
+	// from an interior tile and the adjacent room exists with a walkable entry tile,
+	// resolve all candidate transfers simultaneously against a combined destination map.
+	type roomTile struct {
+		room string
+		x, y int
+	}
 	type transfer struct {
 		creep    *Entity
 		fromRoom *Room
 		toRoom   *Room
 		nx, ny   int
 	}
-	var transfers []transfer
+	type edgeCandidate struct {
+		dx, dy, nx, ny int
+	}
+	pendingTransfers := make(map[string]transfer)
 	for _, rName := range roomNames {
 		room := w.Rooms[rName]
 		creepIDs := make([]string, 0)
@@ -250,41 +260,115 @@ func resolveMovement(w *World, moveIntents []Intent) {
 		sort.Strings(creepIDs)
 		for _, id := range creepIDs {
 			c := room.Entities[id]
-			dx, dy, nx, ny := 0, 0, c.X, c.Y
-			switch {
-			case c.Y == 0:
-				dy, ny = -1, RoomSize-1
-			case c.Y == RoomSize-1:
-				dy, ny = 1, 0
-			case c.X == 0:
-				dx, nx = -1, RoomSize-1
-			case c.X == RoomSize-1:
-				dx, nx = 1, 0
-			default:
-				continue
+			prev := prevPos[id]
+			var cands []edgeCandidate
+			if c.Y == 0 && prev[1] != 0 {
+				cands = append(cands, edgeCandidate{dx: 0, dy: -1, nx: c.X, ny: RoomSize - 1})
+			} else if c.Y == RoomSize-1 && prev[1] != RoomSize-1 {
+				cands = append(cands, edgeCandidate{dx: 0, dy: 1, nx: c.X, ny: 0})
 			}
-			adjName, ok := AdjacentRoomName(rName, dx, dy)
+			if c.X == 0 && prev[0] != 0 {
+				cands = append(cands, edgeCandidate{dx: -1, dy: 0, nx: RoomSize - 1, ny: c.Y})
+			} else if c.X == RoomSize-1 && prev[0] != RoomSize-1 {
+				cands = append(cands, edgeCandidate{dx: 1, dy: 0, nx: 0, ny: c.Y})
+			}
+			for _, cand := range cands {
+				adjName, ok := AdjacentRoomName(rName, cand.dx, cand.dy)
+				if !ok {
+					continue
+				}
+				destRoom := w.Rooms[adjName]
+				if destRoom == nil {
+					continue
+				}
+				if !destRoom.IsWalkableFor(cand.nx, cand.ny, c.User, true) {
+					continue
+				}
+				pendingTransfers[id] = transfer{
+					creep:    c,
+					fromRoom: room,
+					toRoom:   destRoom,
+					nx:       cand.nx,
+					ny:       cand.ny,
+				}
+				break
+			}
+		}
+	}
+
+	if len(pendingTransfers) == 0 {
+		return
+	}
+
+	transferIDs := make([]string, 0, len(pendingTransfers))
+	for id := range pendingTransfers {
+		transferIDs = append(transferIDs, id)
+	}
+	sort.Strings(transferIDs)
+
+	// Fixed-point cross-room collision resolution:
+	// 1) If multiple transferring creeps target the same (room, x, y), lowest creep ID wins.
+	// 2) If a transferring creep targets a tile occupied by a non-transferring creep, cancel it.
+	for {
+		changed := false
+
+		claimedBy := make(map[roomTile]string, len(pendingTransfers))
+		for _, id := range transferIDs {
+			tr, ok := pendingTransfers[id]
 			if !ok {
 				continue
 			}
-			destRoom := w.Rooms[adjName]
-			if destRoom == nil {
+			dest := roomTile{room: tr.toRoom.Name, x: tr.nx, y: tr.ny}
+			if _, taken := claimedBy[dest]; taken {
+				delete(pendingTransfers, id)
+				changed = true
+			} else {
+				claimedBy[dest] = id
+			}
+		}
+
+		stationary := make(map[roomTile]bool)
+		for _, rName := range roomNames {
+			room := w.Rooms[rName]
+			for id, e := range room.Entities {
+				if e.Type == TYPE_CREEP && !e.Spawning {
+					if _, transferring := pendingTransfers[id]; !transferring {
+						stationary[roomTile{room: rName, x: e.X, y: e.Y}] = true
+					}
+				}
+			}
+		}
+
+		for _, id := range transferIDs {
+			tr, ok := pendingTransfers[id]
+			if !ok {
 				continue
 			}
-			if !destRoom.IsWalkableFor(nx, ny, c.User, false) {
-				continue
+			dest := roomTile{room: tr.toRoom.Name, x: tr.nx, y: tr.ny}
+			if stationary[dest] {
+				delete(pendingTransfers, id)
+				changed = true
 			}
-			transfers = append(transfers, transfer{
-				creep:    c,
-				fromRoom: room,
-				toRoom:   destRoom,
-				nx:       nx,
-				ny:       ny,
-			})
+		}
+
+		if !changed {
+			break
 		}
 	}
-	for _, tr := range transfers {
+
+	// Commit surviving transfers: remove from source rooms first, then insert into destination rooms.
+	for _, id := range transferIDs {
+		tr, ok := pendingTransfers[id]
+		if !ok {
+			continue
+		}
 		delete(tr.fromRoom.Entities, tr.creep.ID)
+	}
+	for _, id := range transferIDs {
+		tr, ok := pendingTransfers[id]
+		if !ok {
+			continue
+		}
 		tr.creep.Room = tr.toRoom.Name
 		tr.creep.X = tr.nx
 		tr.creep.Y = tr.ny

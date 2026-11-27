@@ -8,6 +8,7 @@ local DefenseManager <const> = require("defense")
 
 local PLANNER_INTERVAL <const> = 25
 local SCOUT_INTEL_TTL <const> = 1500
+local HOSTILE_INTEL_TTL <const> = 250
 
 ---@type table<integer, FindConstant>
 local EXIT_DIRS <const> = {
@@ -325,7 +326,8 @@ function Colony:findRoomNeedingScout()
     for _, rName in ipairs(adj) do
         local info = intelMap[rName]
         local seen = (info and info.lastSeen) or -9999
-        if (not info) or (now - seen > SCOUT_INTEL_TTL) then
+        local ttl = (info and (info.hostiles or 0) > 0) and HOSTILE_INTEL_TTL or SCOUT_INTEL_TTL
+        if (not info) or (now - seen > ttl) then
             if seen < oldestSeen then
                 oldestSeen = seen
                 best = rName
@@ -525,8 +527,6 @@ function Colony:manageSpawning()
         roleToSpawn = "defender"
         if counts.defender == 0 then
             if energyAvail >= 320 then
-                budget = energyAvail
-            elseif (counts.harvester + counts.miner) == 0 and energyAvail >= 190 then
                 budget = energyAvail
             else
                 budget = math.min(energyCap, 320)

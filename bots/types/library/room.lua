@@ -78,12 +78,14 @@ function RoomTerrain:get(x, y) end
 ---@field roomName string
 local RoomVisual = {}
 
+---@overload fun(self: RoomVisual, pos: RoomPosition|PosLike|RoomObject, style?: VisualStyle): RoomVisual
 ---@param x number
 ---@param y number
 ---@param style? VisualStyle
 ---@return RoomVisual
 function RoomVisual:circle(x, y, style) end
 
+---@overload fun(self: RoomVisual, pos1: RoomPosition|PosLike|RoomObject, pos2: RoomPosition|PosLike|RoomObject, style?: VisualStyle): RoomVisual
 ---@param x1 number
 ---@param y1 number
 ---@param x2 number
@@ -92,6 +94,7 @@ function RoomVisual:circle(x, y, style) end
 ---@return RoomVisual
 function RoomVisual:line(x1, y1, x2, y2, style) end
 
+---@overload fun(self: RoomVisual, pos: RoomPosition|PosLike|RoomObject, w: number, h: number, style?: VisualStyle): RoomVisual
 ---@param x number
 ---@param y number
 ---@param w number
@@ -100,11 +103,12 @@ function RoomVisual:line(x1, y1, x2, y2, style) end
 ---@return RoomVisual
 function RoomVisual:rect(x, y, w, h, style) end
 
----@param points number[][]
+---@param points (number[]|RoomPosition|PosLike)[]
 ---@param style? VisualStyle
 ---@return RoomVisual
 function RoomVisual:poly(points, style) end
 
+---@overload fun(self: RoomVisual, text: string, pos: RoomPosition|PosLike|RoomObject, style?: VisualStyle): RoomVisual
 ---@param text string
 ---@param x number
 ---@param y number
@@ -147,7 +151,8 @@ local Room = {}
 ---@return any[]
 function Room:find(findType, opts) end
 
----Queue a construction site at (x, y) for the given structureType.
+---Queue a construction site at (x, y) or pos for the given structureType.
+---@overload fun(self: Room, pos: RoomPosition|PosLike|RoomObject, structureType: StructureType): ScreepsReturnCode
 ---@param x integer
 ---@param y integer
 ---@param structureType StructureType
@@ -158,7 +163,8 @@ function Room:createConstructionSite(x, y, structureType) end
 ---@return RoomTerrain
 function Room:getTerrain() end
 
----Returns objects of the specified LOOK_* type at (x, y).
+---Returns objects of the specified LOOK_* type at (x, y) or pos.
+---@overload fun(self: Room, lookType: LookType, pos: RoomPosition|PosLike|RoomObject): any[]
 ---@param lookType LookType
 ---@param x integer
 ---@param y integer

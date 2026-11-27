@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -275,8 +276,29 @@ func (w *World) ExportState() WorldState {
 	}
 }
 
+func parseIDNumericSuffix(id string) uint64 {
+	if id == "" {
+		return 0
+	}
+	// Check after the last '_' (e.g. "creep_000042") or after leading 'u' (e.g. "u5").
+	suffix := ""
+	if idx := strings.LastIndexByte(id, '_'); idx >= 0 && idx+1 < len(id) {
+		suffix = id[idx+1:]
+	} else if len(id) > 1 && id[0] == 'u' {
+		suffix = id[1:]
+	} else {
+		return 0
+	}
+	v, err := strconv.ParseUint(suffix, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 // ImportState replaces the World's simulation state with st.
 func (w *World) ImportState(st WorldState) error {
+	var maxID uint64
 	newRooms := make(map[string]*Room, len(st.Rooms))
 	for _, rs := range st.Rooms {
 		roomName := strings.ToUpper(strings.TrimSpace(rs.Name))
@@ -305,11 +327,15 @@ func (w *World) ImportState(st WorldState) error {
 			if es.ID == "" {
 				continue
 			}
-			e := stateToEntity(es)
-			if e.Room == "" {
-				e.Room = roomName
+			if !InBounds(es.X, es.Y) {
+				return fmt.Errorf("import state: entity %q in room %q has out-of-bounds coords (%d,%d)", es.ID, roomName, es.X, es.Y)
 			}
+			e := stateToEntity(es)
+			e.Room = roomName
 			room.Entities[e.ID] = e
+			if n := parseIDNumericSuffix(e.ID); n > maxID {
+				maxID = n
+			}
 		}
 		newRooms[roomName] = room
 	}
@@ -326,6 +352,16 @@ func (w *World) ImportState(st WorldState) error {
 			users[id] = name
 		}
 	}
+	for id := range users {
+		if n := parseIDNumericSuffix(id); n > maxID {
+			maxID = n
+		}
+	}
+
+	nextID := st.NextID
+	if maxID > nextID {
+		nextID = maxID
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -333,12 +369,13 @@ func (w *World) ImportState(st WorldState) error {
 	w.GameTime = st.GameTime
 	w.Users = users
 	w.UserByName = userByName
-	w.nextID = st.NextID
+	w.nextID = nextID
 	if st.Status != "" {
 		w.Status = st.Status
 	}
 	w.Rooms = newRooms
 	w.intents = nil
+	w.events = nil
 
 	return nil
 }

@@ -604,3 +604,108 @@ func TestMigrateDBJSONW9N7(t *testing.T) {
 		t.Fatalf("expected W9N7 to retain creeps, got 0")
 	}
 }
+
+func TestSandboxHardeningAdversarial(t *testing.T) {
+	vm := NewBotVM("Adversary", "u_adv")
+	defer vm.Close()
+	vm.CPULimit = 25 * time.Millisecond
+
+	// C3: collectgarbage and unsafe package fields must be nil.
+	if err := vm.DoString(`
+		assert(collectgarbage == nil, "collectgarbage must be nil")
+		assert(package.loadlib == nil, "package.loadlib must be nil")
+		assert(package.searchpath == nil, "package.searchpath must be nil")
+		assert(package.searchers == nil, "package.searchers must be nil")
+		assert(package.preload == nil, "package.preload must be nil")
+		assert(package.path == nil, "package.path must be nil")
+		assert(package.cpath == nil, "package.cpath must be nil")
+	`); err != nil {
+		t.Fatalf("sandbox globals check failed: %v", err)
+	}
+
+	// C1: catastrophic string.find backtracking must terminate promptly via CPU limit (no uint64 underflow hang).
+	start := time.Now()
+	if err := vm.DoString(`string.find(string.rep("a", 35), "a*a*a*a*a*a*a*a*a*b")`); err == nil {
+		t.Fatalf("expected pattern backtracking to hit CPU limit")
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("pattern backtracking took too long (%v)", time.Since(start))
+	}
+
+	// C1: string.rep OOM bomb must be caught by HardLimits.Memory.
+	if err := vm.DoString(`local s = string.rep("A", 100000000)`); err == nil {
+		t.Fatalf("expected string.rep OOM bomb to fail under memory limit")
+	}
+
+	// C2: 60-level DAG in Memory must terminate quickly under ExportMemory node budget.
+	if err := vm.DoString(`
+		local Memory = require("screeps").Memory
+		local node = { 1 }
+		for i = 1, 60 do
+			node = { a = node, b = node }
+		end
+		Memory.dag = node
+	`); err != nil {
+		t.Fatalf("build DAG failed: %v", err)
+	}
+	dagStart := time.Now()
+	_ = vm.ExportMemory()
+	if time.Since(dagStart) > 2*time.Second {
+		t.Fatalf("ExportMemory DAG took too long (%v)", time.Since(dagStart))
+	}
+
+	// H1 + M3: Fog-of-war visibility, dryRun, and findClosestByRange(FIND_*).
+	w := engine.NewWorld()
+	w.GenerateRoom("W1N1", 101)
+	w.GenerateRoom("W1N2", 102)
+	s1, err := w.SpawnBot("Alice", "W1N1")
+	if err != nil {
+		t.Fatalf("SpawnBot Alice: %v", err)
+	}
+	s2, err := w.SpawnBot("Bob", "W1N2")
+	if err != nil {
+		t.Fatalf("SpawnBot Bob: %v", err)
+	}
+	u1 := s1.User
+	hiddenSpawnID := s2.ID
+
+	vm2 := NewBotVM("Alice", u1)
+	defer vm2.Close()
+	script := `
+local screeps <const> = require("screeps")
+local function loop(game, memory)
+	local room = game.rooms["W1N1"]
+	assert(room ~= nil, "expected W1N1 visible")
+	assert(game.rooms["W1N2"] == nil, "W1N2 must not be visible")
+	assert(game.getObjectById("` + hiddenSpawnID + `") == nil, "hidden room object must not be visible")
+
+	-- Tampering with room.name must not grant vision of W1N2
+	room.name = "W1N2"
+	assert(#room:find(screeps.FIND.HOSTILE_SPAWNS) == 0, "mutated room.name must not leak W1N2")
+
+	-- dryRun must validate without spawning or mutating Memory.creeps
+	local spawn = game.spawns["Spawn1"]
+	local code = spawn:spawnCreep({screeps.PART.WORK, screeps.PART.CARRY, screeps.PART.MOVE}, "DryTest", { dryRun = true, memory = { role = "test" } })
+	assert(code == screeps.OK, "expected dryRun OK, got " .. tostring(code))
+	assert(memory.creeps["DryTest"] == nil, "dryRun must not write Memory.creeps")
+
+	-- findClosestByRange must accept FIND_* integer constants
+	local closestSrc = spawn.pos:findClosestByRange(screeps.FIND.SOURCES)
+	assert(closestSrc ~= nil, "expected findClosestByRange(FIND.SOURCES) to return a source")
+end
+return { loop = loop }
+`
+	if err := vm2.LoadFS(fstest.MapFS{"bot/main.lua": &fstest.MapFile{Data: []byte(script)}}, "bot"); err != nil {
+		t.Fatalf("LoadFS: %v", err)
+	}
+	if err := vm2.RunTick(w); err != nil {
+		t.Fatalf("RunTick failed: %v", err)
+	}
+	w.Step()
+	// Verify DryTest was NOT spawned.
+	for _, e := range w.Rooms["W1N1"].Entities {
+		if e.Type == engine.TYPE_CREEP && e.Name == "DryTest" {
+			t.Fatalf("dryRun unexpectedly spawned DryTest")
+		}
+	}
+}

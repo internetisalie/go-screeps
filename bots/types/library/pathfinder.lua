@@ -29,9 +29,6 @@ function CostMatrix:clone() end
 ---@field swampCost? integer
 ---@field flee? boolean
 ---@field maxOps? integer
----@field maxRooms? integer
----@field maxCost? integer
----@field heuristicWeight? number
 ---@field roomCallback? fun(roomName: string): CostMatrix|boolean|nil
 
 ---@class PathFinderResult

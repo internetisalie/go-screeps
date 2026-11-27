@@ -14,7 +14,8 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "/home/mini/Documents/src/screeps/server/db.json", "Path to Screeps db.json")
+	dbPath := flag.String("db", "", "Optional path to Screeps db.json (empty generates a procedural 5x5 world)")
+	seed := flag.Int64("seed", 42, "Procedural world seed when -db is empty")
 	ticks := flag.Int("ticks", 10000, "Number of ticks to simulate")
 	reportEvery := flag.Int("report", 2000, "Print status summary every N ticks")
 	homeRoom := flag.String("home", "W9N7", "Starter bot room")
@@ -22,8 +23,15 @@ func main() {
 	flag.Parse()
 
 	world := engine.NewWorld()
-	if err := world.ImportFullDBJSON(*dbPath); err != nil {
-		log.Fatalf("ImportFullDBJSON(%q): %v", *dbPath, err)
+	if strings.TrimSpace(*dbPath) != "" {
+		if err := world.ImportFullDBJSON(*dbPath); err != nil {
+			log.Fatalf("ImportFullDBJSON(%q): %v", *dbPath, err)
+		}
+	} else {
+		ensureNeighborhood(world, *homeRoom, *seed, 2)
+		if world.GetRoom(*rivalRoom) == nil {
+			world.GenerateRoom(*rivalRoom, roomSeed(*seed, *rivalRoom))
+		}
 	}
 
 	runner := lua.NewLocalRunner(world, *homeRoom)
@@ -107,6 +115,35 @@ func main() {
 		}
 	} else {
 		fmt.Println("\n=== Console Logs: 0 errors ===")
+	}
+}
+
+func roomSeed(baseSeed int64, roomName string) int64 {
+	h := baseSeed*1099511628211 ^ 1469598103934665603
+	for i := 0; i < len(roomName); i++ {
+		h ^= int64(roomName[i])
+		h *= 1099511628211
+	}
+	return h
+}
+
+func ensureNeighborhood(w *engine.World, centerRoom string, baseSeed int64, radius int) {
+	if w.GetRoom(centerRoom) == nil {
+		w.GenerateRoom(centerRoom, roomSeed(baseSeed, centerRoom))
+	}
+	for dy := -radius; dy <= radius; dy++ {
+		for dx := -radius; dx <= radius; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			rn, ok := engine.AdjacentRoomName(centerRoom, dx, dy)
+			if !ok {
+				continue
+			}
+			if w.GetRoom(rn) == nil {
+				w.GenerateRoom(rn, roomSeed(baseSeed, rn))
+			}
+		}
 	}
 }
 

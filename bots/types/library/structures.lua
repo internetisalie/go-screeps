@@ -14,6 +14,7 @@
 
 ---@class SpawnCreepOpts
 ---@field memory? table<string, any>
+---@field directions? ScreepsDirection[]
 ---@field dryRun? boolean
 
 ---@class StructureSpawn : Structure
@@ -97,7 +98,9 @@ function StructureLink:transferEnergy(target, amount) end
 
 ---@class Tombstone : RoomObject
 ---@field store Store
----@field ticksToDecay integer
+---@field creepId string
+---@field deathTime integer
+---@field ticksToDecay? integer
 
 ---@class ConstructionSite : RoomObject
 ---@field structureType StructureType

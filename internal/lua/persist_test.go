@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -204,8 +205,8 @@ end
 	if sf.World.GameTime != 5 {
 		t.Fatalf("autosaved GameTime = %d, want 5", sf.World.GameTime)
 	}
-	if got := sf.Memories["Bob"]["count"]; got != float64(4) {
-		t.Fatalf("autosaved Memory.count = %v, want 4", got)
+	if got := sf.Memories["Bob"]["count"]; fmt.Sprint(got) != "4" {
+		t.Fatalf("autosaved Memory.count = %v (%T), want 4", got, got)
 	}
 
 	// Step 2 more ticks (GameTime = 7, not divisible by 5), then Close() should save final state.
@@ -220,8 +221,8 @@ end
 	if sf2.World.GameTime != 7 {
 		t.Fatalf("saved GameTime after Close = %d, want 7", sf2.World.GameTime)
 	}
-	if got := sf2.Memories["Bob"]["count"]; got != float64(6) {
-		t.Fatalf("saved Memory.count after Close = %v, want 6", got)
+	if got := sf2.Memories["Bob"]["count"]; fmt.Sprint(got) != "6" {
+		t.Fatalf("saved Memory.count after Close = %v (%T), want 6", got, got)
 	}
 }
 
@@ -261,7 +262,7 @@ func TestMemoryConversionEdgeCases(t *testing.T) {
 		t.Fatalf("expected cyclic self-reference to be omitted")
 	}
 	arr, ok := exported["arr"].([]any)
-	if !ok || len(arr) != 3 || arr[0] != float64(1) || arr[1] != "two" || arr[2] != true {
+	if !ok || len(arr) != 3 || arr[0] != int64(1) || arr[1] != "two" || arr[2] != true {
 		t.Fatalf("unexpected exported array: %#v", exported["arr"])
 	}
 

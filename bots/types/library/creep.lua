@@ -9,8 +9,11 @@
 ---@class MoveToOpts
 ---@field range? integer
 ---@field ignoreCreeps? boolean
----@field maxRooms? integer
----@field reusePath? integer
+---@field ignoreRoads? boolean
+---@field maxOps? integer
+---@field plainCost? integer
+---@field swampCost? integer
+---@field visualizePathStyle? VisualStyle
 
 ---@class Creep : RoomObject
 ---@field name string

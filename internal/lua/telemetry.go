@@ -5,8 +5,12 @@ import (
 	"sort"
 	"strings"
 
+	rt "github.com/arnodel/golua/runtime"
+
 	"go-screeps/internal/engine"
 )
+
+const maxTelemetryScan = 2048
 
 // BotSummary holds a high-level snapshot of one Lua bot's economy, planning,
 // and combat/raid strategy for display in the viewer's Bot Brain sidebar panel.
@@ -53,37 +57,53 @@ func (r *LocalRunner) refreshSummariesLocked() {
 }
 
 func buildBotSummary(world *engine.World, vm *BotVM) BotSummary {
-	mem := vm.ExportMemory()
 	sum := BotSummary{
 		Username:     vm.Username,
 		RoleCounts:   make(map[string]int),
 		DesiredRoles: make(map[string]int),
 	}
 
-	// Pull creep role map from Memory.creeps.
+	var memTbl *rt.Table
+	if vm != nil && vm.R != nil && vm.screepsMod != nil {
+		memTbl, _ = tblGet(vm.screepsMod, "Memory").TryTable()
+	}
+
+	// Pull creep role map directly from Memory.creeps without deep-exporting Memory.
 	creepRoles := make(map[string]string)
-	if mc, ok := mem["creeps"].(map[string]any); ok {
-		for cname, raw := range mc {
-			if cm, ok := raw.(map[string]any); ok {
-				if role, ok := cm["role"].(string); ok && role != "" {
-					creepRoles[cname] = role
+	if memTbl != nil {
+		if mc, ok := tblGet(memTbl, "creeps").TryTable(); ok {
+			scanned := 0
+			for k, v, nextOk := mc.Next(rt.NilValue); nextOk && !k.IsNil() && scanned < maxTelemetryScan; k, v, nextOk = mc.Next(k) {
+				scanned++
+				cname, okName := k.TryString()
+				if !okName {
+					continue
+				}
+				if cm, okCM := v.TryTable(); okCM {
+					if role, okRole := tblGet(cm, "role").TryString(); okRole && role != "" {
+						creepRoles[cname] = role
+					}
 				}
 			}
 		}
-	}
 
-	// Pull global raid / scout fields (used by Raider bot).
-	if rt, ok := mem["raidTarget"].(string); ok {
-		sum.RaidTarget = rt
-	}
-	if ra, ok := mem["raidActive"].(bool); ok {
-		sum.RaidActive = ra
-	}
-	if sr, ok := mem["scoutedRooms"].(map[string]any); ok {
-		for rName := range sr {
-			sum.ScoutedRooms = append(sum.ScoutedRooms, rName)
+		// Pull global raid / scout fields (used by Raider bot).
+		if rtStr, ok := tblGet(memTbl, "raidTarget").TryString(); ok {
+			sum.RaidTarget = rtStr
 		}
-		sort.Strings(sum.ScoutedRooms)
+		if raVal := tblGet(memTbl, "raidActive"); raVal.Type() == rt.BoolType {
+			sum.RaidActive = raVal.AsBool()
+		}
+		if sr, ok := tblGet(memTbl, "scoutedRooms").TryTable(); ok {
+			scanned := 0
+			for k, _, nextOk := sr.Next(rt.NilValue); nextOk && !k.IsNil() && scanned < maxTelemetryScan; k, _, nextOk = sr.Next(k) {
+				scanned++
+				if rName, okStr := k.TryString(); okStr {
+					sum.ScoutedRooms = append(sum.ScoutedRooms, rName)
+				}
+			}
+			sort.Strings(sum.ScoutedRooms)
+		}
 	}
 
 	// Scan world entities owned by this bot.
@@ -149,27 +169,35 @@ func buildBotSummary(world *engine.World, vm *BotVM) BotSummary {
 	}
 
 	// Pull room-specific memory (nextSpawn, desiredRoles, threat, plan summary).
-	if mRooms, ok := mem["rooms"].(map[string]any); ok && bestRoom != "" {
-		if rm, ok := mRooms[bestRoom].(map[string]any); ok {
-			if ns, ok := rm["nextSpawn"].(string); ok && ns != "" {
-				sum.NextSpawn = ns
-			}
-			if dr, ok := rm["desiredRoles"].(map[string]any); ok {
-				for role, v := range dr {
-					if f, ok := v.(float64); ok {
-						sum.DesiredRoles[role] = int(f)
+	if memTbl != nil && bestRoom != "" {
+		if mRooms, ok := tblGet(memTbl, "rooms").TryTable(); ok {
+			if rm, ok := tblGet(mRooms, bestRoom).TryTable(); ok {
+				if ns, ok := tblGet(rm, "nextSpawn").TryString(); ok && ns != "" {
+					sum.NextSpawn = ns
+				}
+				if dr, ok := tblGet(rm, "desiredRoles").TryTable(); ok {
+					scanned := 0
+					for k, v, nextOk := dr.Next(rt.NilValue); nextOk && !k.IsNil() && scanned < maxTelemetryScan; k, v, nextOk = dr.Next(k) {
+						scanned++
+						role, okRole := k.TryString()
+						if !okRole {
+							continue
+						}
+						if iv, okInt := asInt(v); okInt {
+							sum.DesiredRoles[role] = iv
+						}
 					}
 				}
-			}
-			if th, ok := rm["threat"].(map[string]any); ok {
-				if lv, ok := th["level"].(float64); ok {
-					sum.ThreatLevel = int(lv)
+				if th, ok := tblGet(rm, "threat").TryTable(); ok {
+					if lv, okInt := asInt(tblGet(th, "level")); okInt {
+						sum.ThreatLevel = lv
+					}
 				}
+				if rr, ok := tblGet(rm, "remoteRoom").TryString(); ok && rr != "" {
+					sum.RemoteRoom = rr
+				}
+				sum.PlanSummary = summarizeRoomPlanTable(rm)
 			}
-			if rr, ok := rm["remoteRoom"].(string); ok && rr != "" {
-				sum.RemoteRoom = rr
-			}
-			sum.PlanSummary = summarizeRoomPlan(rm)
 		}
 	}
 	if sum.NextSpawn == "" && spawningLabel != "" {
@@ -179,28 +207,29 @@ func buildBotSummary(world *engine.World, vm *BotVM) BotSummary {
 	return sum
 }
 
-func summarizeRoomPlan(rm map[string]any) string {
-	var plan map[string]any
-	if p, ok := rm["plan"].(map[string]any); ok {
+func summarizeRoomPlanTable(rm *rt.Table) string {
+	var plan *rt.Table
+	if p, ok := tblGet(rm, "plan").TryTable(); ok {
 		plan = p
-	} else if p, ok := rm["raiderPlan"].(map[string]any); ok {
+	} else if p, ok := tblGet(rm, "raiderPlan").TryTable(); ok {
 		plan = p
 	}
 	if plan == nil {
 		return ""
 	}
 	countOf := func(key string) int {
-		switch v := plan[key].(type) {
-		case []any:
-			return len(v)
-		case map[string]any:
-			if _, hasX := v["x"]; hasX {
-				return 1
-			}
-			return len(v)
-		default:
+		tbl, ok := tblGet(plan, key).TryTable()
+		if !ok {
 			return 0
 		}
+		if !tblGet(tbl, "x").IsNil() {
+			return 1
+		}
+		count := 0
+		for k, _, nextOk := tbl.Next(rt.NilValue); nextOk && !k.IsNil() && count < maxTelemetryScan; k, _, nextOk = tbl.Next(k) {
+			count++
+		}
+		return count
 	}
 	var parts []string
 	if n := countOf("extensions"); n > 0 {

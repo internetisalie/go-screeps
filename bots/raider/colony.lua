@@ -73,7 +73,7 @@ function RaiderColony.minRoleCost(role)
     elseif role == "brawler" then
         return 260
     elseif role == "skirmisher" then
-        return 200
+        return 250
     elseif role == "medic" then
         return 300
     end
@@ -219,7 +219,7 @@ function RaiderColony:manageSpawning()
     elseif roomCounts.defender < wantDefenders then
         roleToSpawn = "defender"
         if roomCounts.defender == 0 and energyAvail >= 190 then
-            budget = math.max(energyAvail, math.min(energyCap, 550))
+            budget = math.min(energyAvail, 550)
         end
     elseif roomCounts.harvester < wantHarvesters then
         roleToSpawn = "harvester"

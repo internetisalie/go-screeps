@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -19,15 +20,17 @@ type LocalRunner struct {
 	stepMu sync.Mutex
 	bots   []*BotVM
 
-	stateMu    sync.RWMutex
-	activeRoom string
-	tickPeriod time.Duration
-	paused     bool
+	stateMu     sync.RWMutex
+	activeRoom  string
+	tickPeriod  time.Duration
+	paused      bool
 	savePath    string
 	saveEvery   int
 	summaries   []BotSummary
 	viewerState *ViewerState
+	loopCancel  context.CancelFunc
 
+	loopWg   sync.WaitGroup
 	periodCh chan time.Duration
 }
 
@@ -237,20 +240,34 @@ func (r *LocalRunner) StepTick() {
 		tick := r.world.GameTime
 		r.world.RUnlock()
 		if tick%int64(saveEvery) == 0 {
-			_ = r.saveStateLocked(savePath)
+			if err := r.saveStateLocked(savePath); err != nil {
+				log.Printf("save state %q at tick %d: %v", savePath, tick, err)
+			}
 		}
 	}
 }
 
 // Start launches the background simulation loop, calling onUpdate after each stepped tick.
-// The loop stops when ctx is cancelled.
+// The loop stops when ctx is cancelled or Close() is called.
 func (r *LocalRunner) Start(ctx context.Context, tickPeriod time.Duration, onUpdate func()) {
 	if tickPeriod <= 0 {
 		tickPeriod = 200 * time.Millisecond
 	}
 	r.SetTickPeriod(tickPeriod)
 
+	loopCtx, cancel := context.WithCancel(ctx)
+	r.stateMu.Lock()
+	if r.loopCancel != nil {
+		r.loopCancel()
+	}
+	r.loopCancel = cancel
+	r.stateMu.Unlock()
+
+	r.loopWg.Add(1)
 	go func() {
+		defer r.loopWg.Done()
+		defer cancel()
+
 		r.stateMu.RLock()
 		period := r.tickPeriod
 		r.stateMu.RUnlock()
@@ -262,7 +279,7 @@ func (r *LocalRunner) Start(ctx context.Context, tickPeriod time.Duration, onUpd
 			// Uncapped "Max" mode (period <= 2ms): run as fast as CPU allows without OS timer coalescing.
 			if period <= 2*time.Millisecond {
 				select {
-				case <-ctx.Done():
+				case <-loopCtx.Done():
 					return
 				case newPeriod := <-r.periodCh:
 					if newPeriod > 0 {
@@ -273,7 +290,19 @@ func (r *LocalRunner) Start(ctx context.Context, tickPeriod time.Duration, onUpd
 				default:
 				}
 				if r.Paused() {
-					time.Sleep(25 * time.Millisecond)
+					timer := time.NewTimer(25 * time.Millisecond)
+					select {
+					case <-loopCtx.Done():
+						timer.Stop()
+						return
+					case newPeriod := <-r.periodCh:
+						timer.Stop()
+						if newPeriod > 0 {
+							period = newPeriod
+							ticker.Reset(period)
+						}
+					case <-timer.C:
+					}
 					continue
 				}
 				r.StepTick()
@@ -284,7 +313,7 @@ func (r *LocalRunner) Start(ctx context.Context, tickPeriod time.Duration, onUpd
 			}
 
 			select {
-			case <-ctx.Done():
+			case <-loopCtx.Done():
 				return
 			case newPeriod := <-r.periodCh:
 				if newPeriod > 0 {
@@ -371,8 +400,17 @@ func (r *LocalRunner) Logs() []string {
 	return out
 }
 
-// Close persists state (if configured) and shuts down all BotVMs.
+// Close stops any background simulation loop, persists state (if configured), and shuts down all BotVMs.
 func (r *LocalRunner) Close() {
+	r.stateMu.Lock()
+	cancel := r.loopCancel
+	r.loopCancel = nil
+	r.stateMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	r.loopWg.Wait()
+
 	r.stepMu.Lock()
 	defer r.stepMu.Unlock()
 
@@ -380,7 +418,9 @@ func (r *LocalRunner) Close() {
 	savePath := r.savePath
 	r.stateMu.RUnlock()
 	if savePath != "" {
-		_ = r.saveStateLocked(savePath)
+		if err := r.saveStateLocked(savePath); err != nil {
+			log.Printf("save state %q on close: %v", savePath, err)
+		}
 	}
 
 	for _, vm := range r.bots {

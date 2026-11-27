@@ -29,23 +29,28 @@ const (
 	IntentTowerAttack       IntentType = "towerAttack"
 	IntentTowerHeal         IntentType = "towerHeal"
 	IntentTowerRepair       IntentType = "towerRepair"
-	IntentLinkTransfer      IntentType = "linkTransfer"
-	IntentActivateSafeMode  IntentType = "activateSafeMode"
+	IntentLinkTransfer           IntentType = "linkTransfer"
+	IntentActivateSafeMode       IntentType = "activateSafeMode"
+	IntentCreateConstructionSite IntentType = "createConstructionSite"
 )
 
 // Intent represents a validated player command queued for execution on the next Step().
 type Intent struct {
-	Type         IntentType
-	UserID       string
-	ActorID      string
-	TargetID     string
-	Direction    int
-	ResourceType string
-	Amount       int
-	Message      string
-	Body         []string
-	CreepName    string
-	Directions   []int
+	Type          IntentType
+	UserID        string
+	ActorID       string
+	TargetID      string
+	Direction     int
+	ResourceType  string
+	Amount        int
+	Message       string
+	Body          []string
+	CreepName     string
+	Directions    []int
+	TargetRoom    string
+	TargetX       int
+	TargetY       int
+	StructureType string
 }
 
 // QueueIntent validates an intent against current world state and queues it for Step().
@@ -69,40 +74,8 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 
 	switch intent.Type {
 	case IntentSpawnCreep:
-		if actor.Type != STRUCTURE_SPAWN {
-			return ERR_INVALID_TARGET
-		}
-		if actor.SpawningInfo != nil {
-			return ERR_BUSY
-		}
-		if strings.TrimSpace(intent.CreepName) == "" {
-			return ERR_INVALID_ARGS
-		}
-		cost := BodyCost(intent.Body)
-		if cost <= 0 {
-			return ERR_INVALID_ARGS
-		}
-		// Check duplicate creep name across world.
-		for _, r := range w.Rooms {
-			for _, e := range r.Entities {
-				if e.Type == TYPE_CREEP && e.User == userID && e.Name == intent.CreepName {
-					return ERR_NAME_EXISTS
-				}
-			}
-		}
-		// Also check pending spawn intents this tick.
-		for _, pending := range w.intents {
-			if pending.Type == IntentSpawnCreep && pending.UserID == userID {
-				if pending.ActorID == actor.ID {
-					return ERR_BUSY
-				}
-				if pending.CreepName == intent.CreepName {
-					return ERR_NAME_EXISTS
-				}
-			}
-		}
-		if room.EnergyAvailable(userID) < cost {
-			return ERR_NOT_ENOUGH_ENERGY
+		if code := w.validateSpawnCreepLocked(userID, actor, room, intent.Body, intent.CreepName, intent.Directions); code != OK {
+			return code
 		}
 		// Copy slice to avoid external mutation.
 		bodyCopy := make([]string, len(intent.Body))
@@ -129,7 +102,7 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 		}
 		switch intent.Type {
 		case IntentTowerAttack:
-			if target.HitsMax <= 0 {
+			if target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) {
 				return ERR_INVALID_TARGET
 			}
 		case IntentTowerHeal:
@@ -274,7 +247,7 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 			intent.ResourceType = res
 		}
 		target := room.Entities[intent.TargetID]
-		if target == nil || target.ID == actor.ID {
+		if target == nil || target.ID == actor.ID || (!target.IsStructure() && target.Type != TYPE_TOMBSTONE) {
 			return ERR_INVALID_TARGET
 		}
 		if target.User != "" && target.User != userID && target.Type != TYPE_TOMBSTONE && target.Type != STRUCTURE_CONTAINER {
@@ -343,7 +316,7 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 			return ERR_NO_BODYPART
 		}
 		target := room.Entities[intent.TargetID]
-		if target == nil || target.HitsMax <= 0 {
+		if target == nil || target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) {
 			return ERR_INVALID_TARGET
 		}
 		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 1 {
@@ -355,7 +328,7 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 			return ERR_NO_BODYPART
 		}
 		target := room.Entities[intent.TargetID]
-		if target == nil || target.HitsMax <= 0 {
+		if target == nil || target.ID == actor.ID || target.HitsMax <= 0 || (target.Type == TYPE_CREEP && target.Spawning) {
 			return ERR_INVALID_TARGET
 		}
 		if ChebyshevDist(actor.X, actor.Y, target.X, target.Y) > 3 {
@@ -409,26 +382,133 @@ func (w *World) QueueIntent(userID string, intent Intent) int {
 	return OK
 }
 
+// ValidateSpawnCreep validates a spawnCreep call without queuing an intent (used for dryRun).
+func (w *World) ValidateSpawnCreep(userID, spawnID string, body []string, creepName string, directions []int) int {
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+
+	actor := w.getEntityLocked(spawnID)
+	if actor == nil {
+		return ERR_INVALID_TARGET
+	}
+	if actor.User != userID {
+		return ERR_NOT_OWNER
+	}
+	room := w.Rooms[actor.Room]
+	if room == nil {
+		return ERR_INVALID_TARGET
+	}
+	return w.validateSpawnCreepLocked(userID, actor, room, body, creepName, directions)
+}
+
+func (w *World) validateSpawnCreepLocked(userID string, actor *Entity, room *Room, body []string, creepName string, directions []int) int {
+	if actor.Type != STRUCTURE_SPAWN {
+		return ERR_INVALID_TARGET
+	}
+	if actor.SpawningInfo != nil {
+		return ERR_BUSY
+	}
+	if strings.TrimSpace(creepName) == "" {
+		return ERR_INVALID_ARGS
+	}
+	cost := BodyCost(body)
+	if cost <= 0 {
+		return ERR_INVALID_ARGS
+	}
+	for _, d := range directions {
+		if d < TOP || d > TOP_LEFT {
+			return ERR_INVALID_ARGS
+		}
+	}
+	// Check duplicate creep name across world.
+	for _, r := range w.Rooms {
+		for _, e := range r.Entities {
+			if e.Type == TYPE_CREEP && e.User == userID && e.Name == creepName {
+				return ERR_NAME_EXISTS
+			}
+		}
+	}
+	// Also check pending spawn intents this tick.
+	for _, pending := range w.intents {
+		if pending.Type == IntentSpawnCreep && pending.UserID == userID {
+			if pending.ActorID == actor.ID {
+				return ERR_BUSY
+			}
+			if pending.CreepName == creepName {
+				return ERR_NAME_EXISTS
+			}
+		}
+	}
+	if room.EnergyAvailable(userID) < cost {
+		return ERR_NOT_ENOUGH_ENERGY
+	}
+	return OK
+}
+
+// QueueCreateConstructionSite validates and queues a construction site to be materialized on Step().
+func (w *World) QueueCreateConstructionSite(userID, roomName string, x, y int, structureType string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	roomName = strings.ToUpper(strings.TrimSpace(roomName))
+	if _, _, code := w.validateConstructionSiteLocked(userID, roomName, x, y, structureType, true); code != OK {
+		return code
+	}
+	w.intents = append(w.intents, Intent{
+		Type:          IntentCreateConstructionSite,
+		UserID:        userID,
+		TargetRoom:    roomName,
+		TargetX:       x,
+		TargetY:       y,
+		StructureType: structureType,
+	})
+	return OK
+}
+
 // CreateConstructionSite validates and immediately places a new construction site in roomName.
 // Returns (siteID, OK) or ("", ERR_*).
 func (w *World) CreateConstructionSite(userID, roomName string, x, y int, structureType string) (string, int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	return w.createConstructionSiteLocked(userID, roomName, x, y, structureType)
+}
+
+func (w *World) createConstructionSiteLocked(userID, roomName string, x, y int, structureType string) (string, int) {
 	roomName = strings.ToUpper(strings.TrimSpace(roomName))
+	room, cost, code := w.validateConstructionSiteLocked(userID, roomName, x, y, structureType, false)
+	if code != OK {
+		return "", code
+	}
+	id := w.nextEntityID("site")
+	room.Entities[id] = &Entity{
+		ID:            id,
+		Type:          TYPE_CONSTRUCTION_SITE,
+		Room:          roomName,
+		X:             x,
+		Y:             y,
+		User:          userID,
+		StructureType: structureType,
+		Progress:      0,
+		ProgressTotal: cost,
+	}
+	return id, OK
+}
+
+func (w *World) validateConstructionSiteLocked(userID, roomName string, x, y int, structureType string, checkPending bool) (*Room, int, int) {
 	room, ok := w.Rooms[roomName]
 	if !ok {
-		return "", ERR_INVALID_ARGS
+		return nil, 0, ERR_INVALID_ARGS
 	}
 	if x <= 0 || x >= RoomSize-1 || y <= 0 || y >= RoomSize-1 {
-		return "", ERR_INVALID_TARGET
+		return nil, 0, ERR_INVALID_TARGET
 	}
 	cost, validType := CONSTRUCTION_COST[structureType]
 	if !validType {
-		return "", ERR_INVALID_ARGS
+		return nil, 0, ERR_INVALID_ARGS
 	}
 	if room.TerrainAt(x, y) == TERRAIN_MASK_WALL {
-		return "", ERR_INVALID_TARGET
+		return nil, 0, ERR_INVALID_TARGET
 	}
 
 	// Check RCL structure limit.
@@ -454,35 +534,56 @@ func (w *World) CreateConstructionSite(userID, roomName string, x, y int, struct
 			}
 		}
 	}
+	if checkPending {
+		for _, pending := range w.intents {
+			if pending.Type != IntentCreateConstructionSite || pending.TargetRoom != roomName {
+				continue
+			}
+			totalSites++
+			if pending.UserID == userID && pending.StructureType == structureType {
+				existingCount++
+			}
+			if pending.TargetX == x && pending.TargetY == y {
+				return nil, 0, ERR_INVALID_TARGET
+			}
+		}
+	}
 	if totalSites >= CONSTRUCTION_SITE_MAX_NUM {
-		return "", ERR_FULL
+		return nil, 0, ERR_FULL
 	}
 	if existingCount >= maxAllowed {
-		return "", ERR_RCL_NOT_ENOUGH
+		return nil, 0, ERR_RCL_NOT_ENOUGH
 	}
 
 	// Check conflicting objects on the same tile.
+	hasMineral := false
 	for _, e := range room.Entities {
 		if e.X != x || e.Y != y {
 			continue
 		}
+		if e.Type == TYPE_MINERAL {
+			hasMineral = true
+		}
 		if e.Type == TYPE_CONSTRUCTION_SITE {
-			return "", ERR_INVALID_TARGET
+			return nil, 0, ERR_INVALID_TARGET
 		}
 		if e.Type == structureType {
-			return "", ERR_INVALID_TARGET
+			return nil, 0, ERR_INVALID_TARGET
 		}
 		if structureType == STRUCTURE_RAMPART {
-			// Ramparts can be built over most structures except walls/sources/controllers/minerals.
+			// Ramparts can be built over friendly/neutral structures except walls/sources/controllers/minerals.
 			if e.Type == STRUCTURE_WALL || e.Type == TYPE_SOURCE || e.Type == TYPE_MINERAL || e.Type == STRUCTURE_CONTROLLER {
-				return "", ERR_INVALID_TARGET
+				return nil, 0, ERR_INVALID_TARGET
+			}
+			if e.IsStructure() && e.User != "" && e.User != userID {
+				return nil, 0, ERR_INVALID_TARGET
 			}
 			continue
 		}
 		if structureType == STRUCTURE_ROAD {
 			// Roads can be built under ramparts or creeps, not under blocking structures.
 			if e.Type != TYPE_CREEP && e.Type != STRUCTURE_RAMPART && e.Type != TYPE_RESOURCE && e.Type != TYPE_TOMBSTONE {
-				return "", ERR_INVALID_TARGET
+				return nil, 0, ERR_INVALID_TARGET
 			}
 			continue
 		}
@@ -492,23 +593,13 @@ func (w *World) CreateConstructionSite(userID, roomName string, x, y int, struct
 			}
 		}
 		if e.Type != TYPE_CREEP && e.Type != STRUCTURE_RAMPART && e.Type != TYPE_RESOURCE && e.Type != TYPE_TOMBSTONE {
-			return "", ERR_INVALID_TARGET
+			return nil, 0, ERR_INVALID_TARGET
 		}
 	}
-
-	id := w.nextEntityID("site")
-	room.Entities[id] = &Entity{
-		ID:            id,
-		Type:          TYPE_CONSTRUCTION_SITE,
-		Room:          roomName,
-		X:             x,
-		Y:             y,
-		User:          userID,
-		StructureType: structureType,
-		Progress:      0,
-		ProgressTotal: cost,
+	if structureType == STRUCTURE_EXTRACTOR && !hasMineral {
+		return nil, 0, ERR_INVALID_TARGET
 	}
-	return id, OK
+	return room, cost, OK
 }
 
 // AddVisual appends a RoomVisual command to be exposed on the room's next Snapshot().

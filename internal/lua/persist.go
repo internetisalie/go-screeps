@@ -1,6 +1,7 @@
 package lua
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,7 +14,10 @@ import (
 	"go-screeps/internal/engine"
 )
 
-const maxPersistDepth = 64
+const (
+	maxPersistDepth = 64
+	maxPersistNodes = 50000
+)
 
 // ViewerState captures the interactive viewer's camera and execution settings
 // so restarts resume at the exact same room, angle, zoom, speed, and pause state.
@@ -38,17 +42,18 @@ type SaveFile struct {
 
 // luaValueToGo converts a Lua value to a JSON-safe Go value.
 // Unsupported types (functions, userdata, threads, NaN/Inf) return (nil, false).
-func luaValueToGo(v rt.Value, visited map[*rt.Table]bool, depth int) (any, bool) {
-	if v.IsNil() || depth > maxPersistDepth {
+func luaValueToGo(v rt.Value, visited map[*rt.Table]bool, depth int, nodes *int) (any, bool) {
+	if v.IsNil() || depth > maxPersistDepth || *nodes >= maxPersistNodes {
 		return nil, false
 	}
+	*nodes++
 	switch v.Type() {
 	case rt.NilType:
 		return nil, false
 	case rt.BoolType:
 		return v.AsBool(), true
 	case rt.IntType:
-		return float64(v.AsInt()), true
+		return v.AsInt(), true
 	case rt.FloatType:
 		f := v.AsFloat()
 		if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -62,7 +67,7 @@ func luaValueToGo(v rt.Value, visited map[*rt.Table]bool, depth int) (any, bool)
 		if visited[tbl] {
 			return nil, false
 		}
-		return luaTableToGo(tbl, visited, depth+1), true
+		return luaTableToGo(tbl, visited, depth+1, nodes), true
 	default:
 		// Functions, userdata, threads are skipped cleanly.
 		return nil, false
@@ -71,8 +76,8 @@ func luaValueToGo(v rt.Value, visited map[*rt.Table]bool, depth int) (any, bool)
 
 // luaTableToGo converts a Lua table to either []any (if it is a contiguous 1..N array)
 // or map[string]any (for associative tables or empty tables).
-func luaTableToGo(tbl *rt.Table, visited map[*rt.Table]bool, depth int) any {
-	if tbl == nil || depth > maxPersistDepth {
+func luaTableToGo(tbl *rt.Table, visited map[*rt.Table]bool, depth int, nodes *int) any {
+	if tbl == nil || depth > maxPersistDepth || *nodes >= maxPersistNodes {
 		return map[string]any{}
 	}
 	visited[tbl] = true
@@ -87,7 +92,10 @@ func luaTableToGo(tbl *rt.Table, visited map[*rt.Table]bool, depth int) any {
 	maxIdx := 0
 
 	for k, v, ok := tbl.Next(rt.NilValue); ok && !k.IsNil(); k, v, ok = tbl.Next(k) {
-		gv, valid := luaValueToGo(v, visited, depth)
+		if *nodes >= maxPersistNodes {
+			break
+		}
+		gv, valid := luaValueToGo(v, visited, depth, nodes)
 		if !valid {
 			continue
 		}
@@ -185,12 +193,16 @@ func luaTableToMap(tbl *rt.Table) map[string]any {
 		return out
 	}
 	visited := map[*rt.Table]bool{tbl: true}
+	nodes := 0
 	for k, v, ok := tbl.Next(rt.NilValue); ok && !k.IsNil(); k, v, ok = tbl.Next(k) {
+		if nodes >= maxPersistNodes {
+			break
+		}
 		keyStr, okKey := luaKeyToString(k)
 		if !okKey {
 			continue
 		}
-		gv, okVal := luaValueToGo(v, visited, 1)
+		gv, okVal := luaValueToGo(v, visited, 1, &nodes)
 		if !okVal {
 			continue
 		}
@@ -277,19 +289,37 @@ func (vm *BotVM) ExportMemory() map[string]any {
 	return luaTableToMap(tbl)
 }
 
-// ImportMemory replaces the bot VM's screeps.Memory table with data from mem.
+// ImportMemory populates the bot VM's existing screeps.Memory table in-place with data from mem,
+// keeping any Lua references captured from require("screeps").Memory synchronized.
 func (vm *BotVM) ImportMemory(mem map[string]any) {
 	if vm == nil || vm.R == nil || vm.screepsMod == nil {
 		return
 	}
-	tbl := goMapToLuaTable(mem)
+	tbl, ok := tblGet(vm.screepsMod, "Memory").TryTable()
+	if !ok {
+		tbl = rt.NewTable()
+		tblSet(vm.screepsMod, "Memory", rt.TableValue(tbl))
+	} else {
+		var keys []rt.Value
+		for k, _, nextOk := tbl.Next(rt.NilValue); nextOk && !k.IsNil(); k, _, nextOk = tbl.Next(k) {
+			keys = append(keys, k)
+		}
+		for _, k := range keys {
+			tbl.Set(k, rt.NilValue)
+		}
+	}
+	for k, v := range mem {
+		lv := goValueToLua(v)
+		if !lv.IsNil() {
+			tbl.Set(rt.StringValue(k), lv)
+		}
+	}
 	if tbl.Get(rt.StringValue("creeps")).IsNil() {
 		tbl.Set(rt.StringValue("creeps"), rt.TableValue(rt.NewTable()))
 	}
 	if tbl.Get(rt.StringValue("rooms")).IsNil() {
 		tbl.Set(rt.StringValue("rooms"), rt.TableValue(rt.NewTable()))
 	}
-	tblSet(vm.screepsMod, "Memory", rt.TableValue(tbl))
 }
 
 // SetStatePath configures the file path for automatic periodic saves and shutdown save.
@@ -348,16 +378,33 @@ func (r *LocalRunner) saveStateLocked(path string) error {
 		return fmt.Errorf("marshal save state: %w", err)
 	}
 
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create save directory %q: %w", dir, err)
 		}
 	}
 
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
+	tmpFile, err := os.CreateTemp(dir, ".world_state-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp save file in %q: %w", dir, err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanupTmp := func() {
+		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
+	}
+	if _, err := tmpFile.Write(data); err != nil {
+		cleanupTmp()
 		return fmt.Errorf("write temp save file %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Sync(); err != nil {
+		cleanupTmp()
+		return fmt.Errorf("sync temp save file %q: %w", tmpPath, err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp save file %q: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
@@ -373,7 +420,9 @@ func LoadSaveFile(path string) (*SaveFile, error) {
 		return nil, fmt.Errorf("read save file %q: %w", path, err)
 	}
 	var sf SaveFile
-	if err := json.Unmarshal(raw, &sf); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&sf); err != nil {
 		return nil, fmt.Errorf("unmarshal save file %q: %w", path, err)
 	}
 	return &sf, nil
