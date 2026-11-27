@@ -120,40 +120,34 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
         return res;
     }
 
-    // 2. CONTROLLER / POWER RELAY: 4-tier stepped pyramid + 4 yellow corner pylons + cyan rails + floating crystal
+    // 2. CONTROLLER: Circular concentric dark-slate stepped dais + glowing cyan rings + floating crystal!
     if (kind < 2.5) {
         float bob = sin(t * 2.2) * 0.05;
+        float rXZ = length(p.xz);
+
+        // Two-tier circular beveled plinth with recessed outer & inner cyan energy rings
+        float baseDisc = max(rXZ - 0.74, abs(p.y - 0.08) - 0.08);
+        float upperDisc = max(rXZ - 0.50, abs(p.y - 0.19) - 0.06);
+        float centerPad = max(rXZ - 0.24, abs(p.y - 0.25) - 0.04);
+
+        // 4 cardinal dark-slate armor ribs bridging the rings
         float3 ap = float3(abs(p.x), p.y, abs(p.z));
+        float ribX = sdRoundBox(ap - float3(0.46, 0.18, 0.0), float3(0.24, 0.065, 0.075), 0.015);
+        float ribZ = sdRoundBox(ap - float3(0.0, 0.18, 0.46), float3(0.075, 0.065, 0.24), 0.015);
+        float hull = min(min(baseDisc, upperDisc), min(centerPad, min(ribX, ribZ)));
 
-        float plinth = sdRoundBox(p - float3(0.0, 0.08, 0.0), float3(0.74, 0.08, 0.74), 0.025);
-        // Crisp 4-tier terraced pyramid (matches concept sheet Power Relay!)
-        float t1 = sdRoundBox(p - float3(0.0, 0.24, 0.0), float3(0.46, 0.09, 0.46), 0.02);
-        float t2 = sdRoundBox(p - float3(0.0, 0.44, 0.0), float3(0.36, 0.09, 0.36), 0.02);
-        float t3 = sdRoundBox(p - float3(0.0, 0.64, 0.0), float3(0.26, 0.09, 0.26), 0.02);
-        float t4 = sdRoundBox(p - float3(0.0, 0.84, 0.0), float3(0.16, 0.09, 0.16), 0.02);
-        float hull = min(plinth, min(min(t1, t2), min(t3, t4)));
+        // Glowing concentric cyan rings + luminous center emitter pad
+        float ringOuter = sdTorus(p - float3(0.0, 0.165, 0.0), float2(0.60, 0.030));
+        float ringInner = sdTorus(p - float3(0.0, 0.255, 0.0), float2(0.36, 0.028));
+        float coreGlow = max(rXZ - 0.17, abs(p.y - 0.295) - 0.018);
 
-        // Glowing cyan circuit seams tucked between pyramid tiers
-        float c1 = sdRoundBox(p - float3(0.0, 0.34, 0.0), float3(0.39, 0.02, 0.39), 0.008);
-        float c2 = sdRoundBox(p - float3(0.0, 0.54, 0.0), float3(0.29, 0.02, 0.29), 0.008);
-        float c3 = sdRoundBox(p - float3(0.0, 0.74, 0.0), float3(0.19, 0.02, 0.19), 0.008);
-
-        // 4 corner pylons with glowing yellow beacon caps + cyan perimeter rails
-        float post = sdRoundBox(ap - float3(0.58, 0.18, 0.58), float3(0.08, 0.12, 0.08), 0.015);
-        float cap = sdRoundBox(ap - float3(0.58, 0.32, 0.58), float3(0.075, 0.045, 0.075), 0.015);
-        hull = min(hull, post);
-
-        float railX = sdRoundBox(ap - float3(0.0, 0.20, 0.58), float3(0.52, 0.02, 0.02), 0.006);
-        float railZ = sdRoundBox(ap - float3(0.58, 0.20, 0.0), float3(0.02, 0.02, 0.52), 0.006);
-
-        // Levitating faceted cyan crystal above apex
-        float3 cp = p - float3(0.0, 1.32 + bob, 0.0);
+        // Tall levitating faceted cyan diamond crystal above the emitter
+        float3 cp = p - float3(0.0, 0.96 + bob, 0.0);
         cp.xz = rot2(cp.xz, t * 0.85);
-        float crystal = sdOctahedron(cp * float3(1.18, 0.62, 1.18), 0.33) * 0.70;
+        float crystal = sdOctahedron(cp * float3(1.22, 0.56, 1.22), 0.34) * 0.68;
 
         addMat(res, hull, 0.0);
-        addMat(res, cap, 2.0);
-        addMat(res, min(min(min(c1, c2), c3), min(min(railX, railZ), crystal)), 3.0);
+        addMat(res, min(min(ringOuter, ringInner), min(coreGlow, crystal)), 3.0);
         return res;
     }
 
@@ -477,14 +471,15 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
             return res;
         }
 
-        // HARVESTER (flags == 0): Side thruster pods + twin articulated mining pincers with cyan cutter tips!
+        // HARVESTER (flags == 0): Rounded dome + side slate pods + single front cyan rotary mining beam nozzle!
         float3 az = float3(q.x, q.y, abs(q.z));
         float pod = sdRoundBox(az - float3(-0.08, 0.18, 0.38), float3(0.20, 0.12, 0.085), 0.028);
-        float arm = sdCapsule(az, float3(0.22, 0.28, 0.22), float3(0.54, 0.18, 0.22), 0.06);
-        float tip = sdCapsule(az, float3(0.50, 0.18, 0.22), float3(0.65, 0.10, 0.17), 0.05);
+        float barrel = sdCapsule(q, float3(0.20, 0.22, 0.0), float3(0.42, 0.20, 0.0), 0.155);
+        float nozzleRing = sdCapsule(q, float3(0.42, 0.20, 0.0), float3(0.54, 0.19, 0.0), 0.12);
+        float beamTip = length(q - float3(0.58, 0.19, 0.0)) - 0.105;
         addMat(res, pod, 0.0);
-        addMat(res, arm, 4.0);
-        addMat(res, tip, 3.0);
+        addMat(res, min(barrel, nozzleRing), 4.0);
+        addMat(res, beamTip, 3.0);
         return res;
     }
 
@@ -535,7 +530,7 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
     }
 
     // 13. EXTRACTOR: 3-legged dark-slate tripod mining rig arching over glowing purple mineral crystals!
-    {
+    if (kind < 13.5) {
         float mound = sdEllipsoid(p - float3(0.0, 0.06, 0.0), float3(0.72, 0.12, 0.72));
         mound = smax(mound, -p.y, 0.02);
 
@@ -572,6 +567,45 @@ float4 mapScene(float3 p, float kind, float energy, float flags, float t) {
         addMat(res, core, 4.0);
         addMat(res, gauge, 2.0);
         addMat(res, crystals, 5.0);
+        return res;
+    }
+
+    // 14. LINK: Beveled dark-slate pad + 4 corner tabs + raised glowing circular cyan energy pad & ring!
+    if (kind < 14.5) {
+        float3 ap = float3(abs(p.x), p.y, abs(p.z));
+        float pad = sdRoundBox(p - float3(0.0, 0.10, 0.0), float3(0.56, 0.10, 0.56), 0.035);
+        float corner = sdRoundBox(ap - float3(0.46, 0.16, 0.46), float3(0.11, 0.06, 0.11), 0.02);
+        float rXZ = length(p.xz);
+        float bezel = max(rXZ - 0.36, abs(p.y - 0.23) - 0.045);
+        float cyanRing = sdTorus(p - float3(0.0, 0.28, 0.0), float2(0.28, 0.032));
+        float cyanCore = max(rXZ - (0.18 + 0.05 * energy), abs(p.y - 0.285) - 0.032);
+        addMat(res, min(pad, min(corner, bezel)), 0.0);
+        addMat(res, min(cyanRing, cyanCore), 3.0);
+        return res;
+    }
+
+    // 15. TERMINAL: Dark-slate plinth + yellow/cyan trim + tilted parabolic communications dish!
+    {
+        float3 ap = float3(abs(p.x), p.y, abs(p.z));
+        float base = sdRoundBox(p - float3(0.0, 0.10, 0.0), float3(0.64, 0.10, 0.64), 0.03);
+        float ped = sdRoundBox(p - float3(0.0, 0.28, 0.0), float3(0.26, 0.12, 0.26), 0.03);
+        float mast = sdCapsule(p, float3(0.0, 0.36, 0.0), float3(0.0, 0.62, 0.0), 0.09);
+        float baseTrim = sdRoundBox(p - float3(0.0, 0.05, 0.0), float3(0.66, 0.018, 0.66), 0.008);
+        float cornerGlow = sdRoundBox(ap - float3(0.52, 0.21, 0.52), float3(0.06, 0.02, 0.06), 0.008);
+
+        // Tilted parabolic dish bowl + glowing yellow receiver feed horn
+        float3 dp = p - float3(0.0, 0.80, 0.0);
+        dp.xy = rot2(dp.xy, -0.58);
+        float outerShell = sdEllipsoid(dp, float3(0.46, 0.20, 0.46));
+        float innerCut = sdEllipsoid(dp - float3(0.0, 0.10, 0.0), float3(0.41, 0.19, 0.41));
+        float dish = max(outerShell, max(-innerCut, dp.y - 0.06));
+        float feedStem = sdCapsule(dp, float3(0.0, -0.04, 0.0), float3(0.0, 0.22, 0.0), 0.032);
+        float feedTip = length(dp - float3(0.0, 0.25, 0.0)) - 0.065;
+
+        addMat(res, min(base, min(ped, mast)), 0.0);
+        addMat(res, min(dish, feedStem), 4.0);
+        addMat(res, baseTrim, 3.0);
+        addMat(res, min(cornerGlow, feedTip), 2.0);
         return res;
     }
 }

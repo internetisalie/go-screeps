@@ -1864,7 +1864,7 @@ func sdfObjectKind(typ string) (kind float32, padX, padTop, padBot float32, ok b
 		return 5, 1.30, 1.45, 0.75, true
 	case "tower":
 		return 6, 1.60, 1.90, 0.85, true
-	case "storage", "terminal", "factory":
+	case "storage", "factory":
 		return 7, 1.60, 1.85, 0.85, true
 	case "container":
 		return 8, 1.25, 1.35, 0.72, true
@@ -1878,6 +1878,10 @@ func sdfObjectKind(typ string) (kind float32, padX, padTop, padBot float32, ok b
 		return 12, 1.30, 1.65, 0.72, true
 	case "extractor":
 		return 13, 1.55, 1.95, 0.82, true
+	case "link":
+		return 14, 1.32, 1.35, 0.72, true
+	case "terminal":
+		return 15, 1.50, 1.95, 0.80, true
 	default:
 		return 0, 0, 0, 0, false
 	}
