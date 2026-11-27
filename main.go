@@ -792,15 +792,20 @@ func (s *viewerState) buildHoverCard(th *theme.Theme) core.Widget {
 			owner = u
 		}
 	}
+	titleRow := make([]core.Widget, 0, 3)
+	if ico := entityIconWidget(top, 15); ico != nil {
+		titleRow = append(titleRow, ico)
+	}
+	titleRow = append(titleRow,
+		basic.Text{Content: title, Style: th.Text.Body.WithColor(th.Color.Ink)},
+		basic.Text{Content: fmt.Sprintf("(%d, %d)", s.cam.HoverX, s.cam.HoverY), Style: th.Text.Caption.WithColor(th.Color.Ink2)},
+	)
 	rows := []core.Widget{
 		basic.Row{
-			Size:    layout.MainMin,
-			Cross:   layout.CrossCenter,
-			Spacing: theme.Space8,
-			Children: []core.Widget{
-				basic.Text{Content: title, Style: th.Text.Body.WithColor(th.Color.Ink)},
-				basic.Text{Content: fmt.Sprintf("(%d, %d)", s.cam.HoverX, s.cam.HoverY), Style: th.Text.Caption.WithColor(th.Color.Ink2)},
-			},
+			Size:     layout.MainMin,
+			Cross:    layout.CrossCenter,
+			Spacing:  6,
+			Children: titleRow,
 		},
 		basic.Text{
 			Content: fmt.Sprintf("%s • %s", top.Type, owner),
@@ -1322,29 +1327,44 @@ func (s *viewerState) buildBotBrainCard(bs lua.BotSummary, th *theme.Theme) core
 
 func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime int64, creepMemJSON string, th *theme.Theme) core.Widget {
 	// 1. Static Identity & Specs
+	headerIcon := entityIconBadge(obj, 26, 16)
+	if headerIcon == nil {
+		headerIcon = basic.Container{
+			Color:   objectBadgeColor(obj.Type),
+			Padding: geom.Symmetric(6, 2),
+			Radius:  th.Radius.Control,
+			Child: basic.Text{
+				Content: strings.ToUpper(obj.Type),
+				Style:   th.Text.Caption.WithColor(geom.Hex(0x0f1216)),
+			},
+		}
+	}
 	staticRows := []core.Widget{
 		basic.Row{
 			Cross:   layout.CrossCenter,
 			Spacing: theme.Space8,
 			Children: []core.Widget{
-				basic.Container{
-					Color:   objectBadgeColor(obj.Type),
-					Padding: geom.Symmetric(6, 2),
-					Radius:  th.Radius.Control,
-					Child: basic.Text{
-						Content: strings.ToUpper(obj.Type),
-						Style:   th.Text.Caption.WithColor(geom.Hex(0x0f1216)),
-					},
-				},
+				headerIcon,
 				basic.Expanded{
-					Child: basic.Text{
-						Content: func() string {
-							if obj.Name != "" {
-								return obj.Name
-							}
-							return obj.ID
-						}(),
-						Style: th.Text.Body.WithColor(th.Color.Ink),
+					Child: basic.Column{
+						Size:    layout.MainMin,
+						Cross:   layout.CrossStart,
+						Spacing: 1,
+						Children: []core.Widget{
+							basic.Text{
+								Content: func() string {
+									if obj.Name != "" {
+										return obj.Name
+									}
+									return obj.ID
+								}(),
+								Style: th.Text.Body.WithWeight(600).WithColor(th.Color.Ink),
+							},
+							basic.Text{
+								Content: obj.Type,
+								Style:   th.Text.Caption.WithSize(10).WithColor(th.Color.Ink2),
+							},
+						},
 					},
 				},
 			},

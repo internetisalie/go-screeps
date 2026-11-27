@@ -37,12 +37,18 @@ var (
 //go:embed assets/icons/events/event_icons.json
 var eventIconsJSON []byte
 
+//go:embed assets/icons/entities/entity_icons.json
+var entityIconsJSON []byte
+
 type eventIconSpec struct {
 	path  *paint.Path
 	color geom.Color
 }
 
-var eventIconMap = loadEventIcons()
+var (
+	eventIconMap  = loadIconManifest(eventIconsJSON)
+	entityIconMap = loadIconManifest(entityIconsJSON)
+)
 
 func parseHexColor(s string, fallback geom.Color) geom.Color {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
@@ -56,7 +62,7 @@ func parseHexColor(s string, fallback geom.Color) geom.Color {
 	return geom.Hex(uint32(v))
 }
 
-func loadEventIcons() map[string]eventIconSpec {
+func loadIconManifest(raw []byte) map[string]eventIconSpec {
 	var manifest struct {
 		Icons map[string]struct {
 			Color string `json:"color"`
@@ -64,7 +70,7 @@ func loadEventIcons() map[string]eventIconSpec {
 		} `json:"icons"`
 	}
 	out := make(map[string]eventIconSpec)
-	if err := json.Unmarshal(eventIconsJSON, &manifest); err != nil {
+	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return out
 	}
 	for k, v := range manifest.Icons {
@@ -76,6 +82,83 @@ func loadEventIcons() map[string]eventIconSpec {
 		}
 	}
 	return out
+}
+
+// entityIconKey resolves a RoomObject to its entity_icons.json key (supporting creep role detection).
+func entityIconKey(obj screeps.RoomObject) string {
+	if obj.Type == "creep" || obj.Type == "powerCreep" {
+		low := strings.ToLower(obj.Name)
+		switch {
+		case strings.Contains(low, "mineral"):
+			return "mineralHarvester"
+		case strings.Contains(low, "harvester") || strings.Contains(low, "miner"):
+			return "harvester"
+		case strings.Contains(low, "hauler") || strings.Contains(low, "carrier") || strings.Contains(low, "transporter"):
+			return "hauler"
+		case strings.Contains(low, "upgrader"):
+			return "upgrader"
+		case strings.Contains(low, "pioneer") || strings.Contains(low, "remotebuilder"):
+			return "pioneer"
+		case strings.Contains(low, "builder") || strings.Contains(low, "repair"):
+			return "builder"
+		case strings.Contains(low, "dismantler") || strings.Contains(low, "siege"):
+			return "dismantler"
+		case strings.Contains(low, "healer") || strings.Contains(low, "medic"):
+			return "healer"
+		case strings.Contains(low, "skirmisher") || strings.Contains(low, "ranger") || strings.Contains(low, "archer"):
+			return "skirmisher"
+		case strings.Contains(low, "defender") || strings.Contains(low, "brawler") || strings.Contains(low, "attacker") || strings.Contains(low, "guard"):
+			return "defender"
+		case strings.Contains(low, "claimer") || strings.Contains(low, "reserver"):
+			return "claimer"
+		default:
+			return "creep"
+		}
+	}
+	if _, ok := entityIconMap[obj.Type]; ok {
+		return obj.Type
+	}
+	return "creep"
+}
+
+func entityIconWidget(obj screeps.RoomObject, size float32) core.Widget {
+	spec, ok := entityIconMap[entityIconKey(obj)]
+	if !ok {
+		return nil
+	}
+	return basic.SizedBox{
+		Width:  size,
+		Height: size,
+		Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: spec.path, color: spec.color}},
+	}
+}
+
+func entityIconBadge(obj screeps.RoomObject, boxSize, iconSize float32) core.Widget {
+	spec, ok := entityIconMap[entityIconKey(obj)]
+	if !ok {
+		return nil
+	}
+	bg := spec.color
+	bg.A = 0.14
+	bd := spec.color
+	bd.A = 0.45
+	return basic.SizedBox{
+		Width:  boxSize,
+		Height: boxSize,
+		Child: basic.Container{
+			Color:  bg,
+			Radius: 5,
+			Border: paint.Stroke{Width: 1, Color: bd},
+			Child: basic.Align{
+				Alignment: layout.AlignCenter,
+				Child: basic.SizedBox{
+					Width:  iconSize,
+					Height: iconSize,
+					Child:  control.CustomPaint{Painter: strokedEventIconPainter{path: spec.path, color: spec.color}},
+				},
+			},
+		},
+	}
 }
 
 type strokedEventIconPainter struct {
@@ -1370,9 +1453,40 @@ func (s *viewerState) buildFloatingSelectionCard(th *theme.Theme) core.Widget {
 				if obj.Name != "" {
 					lbl = obj.Name
 				}
-				tabs = append(tabs, sbPill(lbl, i == s.selectedStackIdx, func() {
-					s.SetState(func() { s.selectedStackIdx = i })
-				}, th))
+				activeTab := i == s.selectedStackIdx
+				bg := colPillIdleBg
+				bd := colPillIdleBd
+				fg := colTextBright
+				if activeTab {
+					bg = colPillActBg
+					bd = colPillActBd
+					fg = geom.Hex(0xffffff)
+				}
+				tabChildren := make([]core.Widget, 0, 2)
+				if ico := entityIconWidget(obj, 13); ico != nil {
+					tabChildren = append(tabChildren, ico)
+				}
+				tabChildren = append(tabChildren, basic.Text{
+					Content: lbl,
+					Style:   th.Text.Caption.WithColor(fg),
+				})
+				tabs = append(tabs, interact.GestureDetector{
+					OnTap: func() {
+						s.SetState(func() { s.selectedStackIdx = i })
+					},
+					Child: basic.Container{
+						Color:   bg,
+						Padding: geom.Symmetric(8, 4),
+						Radius:  5,
+						Border:  paint.Stroke{Width: 1, Color: bd},
+						Child: basic.Row{
+							Size:     layout.MainMin,
+							Cross:    layout.CrossCenter,
+							Spacing:  5,
+							Children: tabChildren,
+						},
+					},
+				})
 			}
 			rows = append(rows, basic.Wrap{
 				Spacing:    4,
