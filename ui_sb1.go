@@ -403,7 +403,7 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 				evCol = colAmber
 			case "raid":
 				evCol = geom.Hex(0xc084fc)
-			case "rcl":
+			case "rcl", "spawn":
 				evCol = colGreen
 			case "build":
 				evCol = colCyan

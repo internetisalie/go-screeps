@@ -2078,19 +2078,22 @@ func run() error {
 	rival := flag.String("rival", "auto", "Rival room for competing embedded raider Lua bot in -local mode ('auto' picks a connected neighbor, '' disables)")
 	tick := flag.Duration("tick", 250*time.Millisecond, "Tick period in -local mode")
 	seed := flag.Int64("seed", 42, "Room generation seed in -local mode")
+	multi := flag.Bool("multi", false, "Allow multiple concurrent viewer windows (skip single-instance lock)")
 	flag.Parse()
 
 	if *migrate && strings.TrimSpace(*dbPath) == "" {
 		return fmt.Errorf("-migrate requires an explicit -db path")
 	}
 
-	if ln, ok := acquireSingleInstance(); !ok {
-		log.Printf("go-screeps is already running; activated existing window")
-		return nil
-	} else if ln != nil {
-		defer func() {
-			_ = ln.Close()
-		}()
+	if !*multi {
+		if ln, ok := acquireSingleInstance(); !ok {
+			log.Printf("go-screeps is already running; activated existing window")
+			return nil
+		} else if ln != nil {
+			defer func() {
+				_ = ln.Close()
+			}()
+		}
 	}
 
 	app := gowaku.App{

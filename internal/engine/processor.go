@@ -217,6 +217,7 @@ func processSpawns(w *World, roomNames []string, spawnIntents []Intent) {
 					}
 					creep.AgeTime = w.GameTime + ttl
 					spawn.SpawningInfo = nil
+					w.recordEventLocked(room.Name, "spawn", fmt.Sprintf("Spawned: %s", creep.Name))
 					placed = true
 					break
 				}
