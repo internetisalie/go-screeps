@@ -443,8 +443,8 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 			s.localRunner.RefreshSummaries()
 			sums = s.localRunner.BotSummaries()
 		}
-		for _, bs := range sums {
-			sections = append(sections, s.buildSB1ColonyCard(bs, th))
+		for idx, bs := range sums {
+			sections = append(sections, s.buildSB1ColonyCard(bs, idx == 0, th))
 		}
 	} else {
 		sections = append(sections, basic.Container{
@@ -592,7 +592,77 @@ func (s *viewerState) buildLeftSidebar(th *theme.Theme) core.Widget {
 	}
 }
 
-func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) core.Widget {
+type botIconPainter struct {
+	primary bool
+}
+
+func (p botIconPainter) Paint(c *paint.Canvas, sz geom.Size) {
+	if sz.W <= 0 || sz.H <= 0 {
+		return
+	}
+	cx := sz.W / 2
+	cy := sz.H / 2
+	r := min(sz.W, sz.H) * 0.44
+
+	// Subtle radial/rounded emblem backdrop.
+	bgCol := geom.RGBA(0.66, 0.33, 0.97, 0.16)
+	bdCol := geom.RGBA(0.66, 0.33, 0.97, 0.45)
+	topCol := geom.Hex(0xd8b4fe)
+	leftCol := geom.Hex(0x9333ea)
+	rightCol := geom.Hex(0x581c87)
+	accentCol := geom.Hex(0xf472b6)
+	if p.primary {
+		bgCol = geom.RGBA(0.22, 0.74, 0.97, 0.16)
+		bdCol = geom.RGBA(0.22, 0.74, 0.97, 0.45)
+		topCol = geom.Hex(0x7dd3fc)
+		leftCol = geom.Hex(0x2563eb)
+		rightCol = geom.Hex(0x1e3a8a)
+		accentCol = geom.Hex(0x38bdf8)
+	}
+
+	c.DrawRRect(geom.RRectAll(geom.Rect{W: sz.W, H: sz.H}, 6), mmFill(bgCol))
+	c.DrawRRect(geom.RRectAll(geom.Rect{X: 0.5, Y: 0.5, W: sz.W - 1, H: sz.H - 1}, 6), mmStroke(1, bdCol))
+
+	// Isometric hex-cube geometry centered at (cx, cy).
+	dx := r * 0.866
+	dy := r * 0.5
+	top := geom.Offset{X: cx, Y: cy - r}
+	topL := geom.Offset{X: cx - dx, Y: cy - dy}
+	topR := geom.Offset{X: cx + dx, Y: cy - dy}
+	mid := geom.Offset{X: cx, Y: cy}
+	botL := geom.Offset{X: cx - dx, Y: cy + dy}
+	botR := geom.Offset{X: cx + dx, Y: cy + dy}
+	bot := geom.Offset{X: cx, Y: cy + r}
+
+	triQuad := func(a, b, d, e geom.Offset) *paint.Path {
+		pt := &paint.Path{}
+		pt.MoveTo(a.X, a.Y)
+		pt.LineTo(b.X, b.Y)
+		pt.LineTo(d.X, d.Y)
+		pt.LineTo(e.X, e.Y)
+		pt.Close()
+		return pt
+	}
+
+	// Top, left, right faces of the isometric bot emblem.
+	c.DrawPath(triQuad(top, topR, mid, topL), mmFill(topCol))
+	c.DrawPath(triQuad(topL, mid, bot, botL), mmFill(leftCol))
+	c.DrawPath(triQuad(mid, topR, botR, bot), mmFill(rightCol))
+
+	// Crisp specular edge + glowing core/visor accent.
+	if p.primary {
+		// Glowing cyan hive node in center of top face.
+		c.DrawRRect(geom.RRectAll(
+			geom.Rect{X: cx - 2.5, Y: cy - dy*1.25 - 1.5, W: 5, H: 3}, 1.5,
+		), mmFill(geom.Hex(0xe0f2fe)))
+	} else {
+		// Raider twin visor eyes on left/right faces.
+		c.DrawRect(geom.Rect{X: cx - dx*0.58, Y: cy + dy*0.05, W: 3.2, H: 2.2}, mmFill(accentCol))
+		c.DrawRect(geom.Rect{X: cx + dx*0.26, Y: cy + dy*0.05, W: 3.2, H: 2.2}, mmFill(accentCol))
+	}
+}
+
+func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, isPrimary bool, th *theme.Theme) core.Widget {
 	active := bs.HomeRoom != "" && bs.HomeRoom == s.snap.Room
 	bd := colBorderDim
 	if active {
@@ -616,6 +686,12 @@ func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) cor
 		statusLine = bs.NextSpawn
 	}
 
+	botIcon := basic.SizedBox{
+		Width:  30,
+		Height: 30,
+		Child:  control.CustomPaint{Painter: botIconPainter{primary: isPrimary}},
+	}
+
 	targetRoom := bs.HomeRoom
 	card := basic.Container{
 		Color:   colCardBg,
@@ -625,32 +701,48 @@ func (s *viewerState) buildSB1ColonyCard(bs lua.BotSummary, th *theme.Theme) cor
 		Child: basic.Column{
 			Size:    layout.MainMin,
 			Cross:   layout.CrossStretch,
-			Spacing: 4,
+			Spacing: 5,
 			Children: []core.Widget{
 				basic.Row{
-					Cross: layout.CrossCenter,
+					Cross:   layout.CrossCenter,
+					Spacing: 8,
 					Children: []core.Widget{
+						botIcon,
 						basic.Expanded{
-							Child: basic.Text{
-								Content: bs.Username,
-								Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
-							},
-						},
-						basic.Container{
-							Color:   geom.Hex(0x14263d),
-							Padding: geom.Symmetric(6, 2),
-							Radius:  4,
-							Border:  paint.Stroke{Width: 1, Color: colPillIdleBd},
-							Child: basic.Text{
-								Content: fmt.Sprintf("RCL %d", bs.RCL),
-								Style:   th.Text.Caption.WithSize(10).WithColor(colCyan),
+							Child: basic.Column{
+								Size:    layout.MainMin,
+								Cross:   layout.CrossStretch,
+								Spacing: 2,
+								Children: []core.Widget{
+									basic.Row{
+										Cross: layout.CrossCenter,
+										Children: []core.Widget{
+											basic.Expanded{
+												Child: basic.Text{
+													Content: bs.Username,
+													Style:   th.Text.Body.WithWeight(600).WithColor(colTextBright),
+												},
+											},
+											basic.Container{
+												Color:   geom.Hex(0x14263d),
+												Padding: geom.Symmetric(6, 2),
+												Radius:  4,
+												Border:  paint.Stroke{Width: 1, Color: colPillIdleBd},
+												Child: basic.Text{
+													Content: fmt.Sprintf("RCL %d", bs.RCL),
+													Style:   th.Text.Caption.WithSize(10).WithColor(colCyan),
+												},
+											},
+										},
+									},
+									basic.Text{
+										Content: fmt.Sprintf("%s • %d/%d E • %d creeps", bs.HomeRoom, bs.EnergyAvail, bs.EnergyCap, totalCreeps),
+										Style:   th.Text.Caption.WithSize(11).WithColor(colTextMuted),
+									},
+								},
 							},
 						},
 					},
-				},
-				basic.Text{
-					Content: fmt.Sprintf("%s  •  %d/%d E  •  %d creeps", bs.HomeRoom, bs.EnergyAvail, bs.EnergyCap, totalCreeps),
-					Style:   th.Text.Caption.WithColor(colTextMuted),
 				},
 				basic.Text{
 					Content: "● " + statusLine,
