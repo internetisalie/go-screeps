@@ -1351,12 +1351,6 @@ func buildObjectCard(obj screeps.RoomObject, users map[string]string, gameTime i
 		},
 	}
 
-	if obj.Name != "" {
-		staticRows = append(staticRows, basic.Text{
-			Content: "ID: " + obj.ID,
-			Style:   th.Text.Caption.WithColor(th.Color.Ink2),
-		})
-	}
 	if obj.User != "" {
 		owner := obj.User
 		if u, ok := users[obj.User]; ok {
